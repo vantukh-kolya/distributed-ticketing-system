@@ -1,63 +1,46 @@
-# Dev setup — Docker Compose
+# Development setup
 
-## Prerequisites
+Run commands from the repository root unless a service directory is specified. Requirements: Docker, Docker Compose v2 and free ports `5433`, `5673`, `15673`, `8080`, `8081`, `8082`.
 
-- Docker + Docker Compose v2
-- Ports free: `5433`, `5673`, `15673`, `8080`, `8081`, `8082`
-
-## Start stack
+## Start the stack
 
 ```bash
 docker compose up -d --build
 ```
 
-First run builds four PHP images (one per service). Postgres init creates databases from `ops/postgres/init/01-databases.sql`. Four one-shot `*-migrate` services apply migrations before the corresponding HTTP processes, workers and relays start.
+The [Compose file](../docker-compose.yml) builds PHP images per service using the [shared Dockerfile](../docker/php/Dockerfile). PostgreSQL initialization creates four databases; one-shot `*-migrate` jobs complete before each service's HTTP process, worker and relay start. Rebuild after application changes because PHP source is copied into the images.
 
-**Reset everything (wipe DB):**
+| Endpoint | Purpose |
+|----------|---------|
+| [localhost:8080](http://localhost:8080) | Booking HTTP API |
+| [localhost:8081](http://localhost:8081) | Orchestrator HTTP API |
+| [localhost:8082](http://localhost:8082) | Reservation Console; proxies internal Inventory HTTP reads |
+| [localhost:15673](http://localhost:15673) | RabbitMQ management (`guest` / `guest`) |
+| `localhost:5673` | Host AMQP access; containers use `rabbitmq:5672` |
+| `localhost:5433` | PostgreSQL (`ticketing` / `ticketing`), databases `booking`, `inventory`, `payment`, `orchestrator` |
+
+Override RabbitMQ host ports if needed:
 
 ```bash
-docker compose down -v
-docker compose up -d --build
+RABBITMQ_AMQP_PORT=5674 RABBITMQ_MANAGEMENT_PORT=15674 docker compose up -d
 ```
 
-## Endpoints
+## Create a reservation
 
-| URL | Purpose |
-|-----|---------|
-| http://localhost:8080 | booking-service HTTP |
-| http://localhost:8081 | orchestrator-service HTTP |
-| http://localhost:8082 | Reservation Console |
-| localhost:5673 | RabbitMQ AMQP (host access; containers use `rabbitmq:5672`) |
-| http://localhost:15673 | RabbitMQ management (`guest` / `guest`) |
-| localhost:5433 | PostgreSQL (`ticketing` / `ticketing`, DBs: `booking`, `inventory`, `payment`, `orchestrator`) |
-
-## Seed inventory
+Seed a show and seats:
 
 ```bash
 docker compose exec inventory-worker php bin/console app:inventory:seed-seats sample-show A1 A2 B1 --name="Sample Show"
 ```
 
-Use **seat UUIDs** (not `A1`) in `POST /api/reservations`. List from DB:
+Open the [Reservation Console](http://localhost:8082), select seats and create a reservation. It generates an idempotency key and polls service read APIs. The reservation ID remains in the URL for reopening its status; terminal failures include the saga failure reason.
+
+For a direct HTTP request, use seat UUIDs from the seed output or this query, not seat codes such as `A1`:
 
 ```bash
-docker compose exec postgres psql -U ticketing -d inventory -c "SELECT id, seat_code FROM seats WHERE show_id = 'sample-show';"
-```
+docker compose exec postgres psql -U ticketing -d inventory \
+  -c "SELECT id, seat_code FROM seats WHERE show_id = 'sample-show';"
 
-## Reservation Console
-
-Open http://localhost:8082 after the stack starts. Select an event from the catalog,
-choose available seats, and create a reservation. The page polls the booking,
-inventory, and orchestrator read APIs and visualizes the happy-path or compensation
-state changes. The reservation ID is kept in the page URL, so the same status can be
-reopened later from the link or by entering the ID in the status panel. Terminal
-failures include their cancellation reason. An idempotency key is generated
-automatically for every new reservation and remains available under technical
-details. RabbitMQ is available separately at http://localhost:15673 (`guest` /
-`guest`).
-
-## Create reservation
-
-```bash
 curl -X POST http://localhost:8080/api/reservations \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: my-key-001' \
@@ -69,177 +52,119 @@ curl -X POST http://localhost:8080/api/reservations \
   }'
 ```
 
-## Automated E2E tests
-
-Start with the basic happy-path test from the repository root:
+Use the returned `reservationId` to inspect the workflow:
 
 ```bash
-./tests/e2e/happy-path.sh
+curl 'http://localhost:8081/api/saga/<reservation-id>'
 ```
 
-The basic runner intentionally checks only the business result:
-
-1. Builds and starts the Compose stack with a successful fake payment token.
-2. Seeds one uniquely named show and seat.
-3. Creates a reservation through the booking HTTP API.
-4. Waits for the asynchronous saga to finish.
-5. Checks `CONFIRMED` in orchestrator and booking, `SOLD` in inventory, and `PAID` in payment.
-
-The longer advanced runner additionally republishes the saga outbox rows and
-verifies consumer inbox claims and duplicate-delivery safety:
-
-```bash
-./tests/e2e/happy-path-idempotency.sh
-```
-
-The advanced runner:
-
-1. Builds and starts the Compose stack with `tok_fake_visa`.
-2. Seeds a uniquely named show and seat.
-3. Creates a reservation over HTTP and waits for `CONFIRMED` / `SOLD` / `PAID`.
-4. Verifies inbox claims for messages consumed by inventory, payment and orchestrator. Booking is verified through its reservation status and unchanged outbox count after redelivery.
-5. Marks only this reservation's outbox rows unpublished, causing the relays to publish them again with their original AMQP `message_id` values.
-6. Waits for RabbitMQ queues to drain and proves that states, row counts, outbox counts, PostgreSQL seat row revision, and saga timestamp did not change.
-
-Payment failure and compensation, including duplicate redelivery:
-
-```bash
-./tests/e2e/payment-failure.sh
-```
-
-This runner starts the stack with `tok_decline` and verifies:
-
-1. The reservation reaches `CANCELLED` in both booking and orchestrator.
-2. The payment is `FAILED` with `PAYMENT_DECLINED`, no gateway payment ID or paid timestamp, and a failure timestamp.
-3. The hold is `RELEASED`; the seat is `AVAILABLE` with no reservation owner.
-4. Outbox records prove the exact flow: `HoldSeats` → `SeatsHeld` → `ProcessPayment` → `PaymentFailed` → `ReleaseSeats` → `SeatsReleased` → `ReservationCancelled`, with no confirmation/success messages.
-5. Republishing all of this reservation's outbox messages leaves states, record counts, payment/hold records, outbox counts, PostgreSQL seat row revision and saga timestamp unchanged.
-6. Inbox claims exist in inventory, payment and orchestrator; booking works without an inbox table.
-
-The two advanced entry points share `tests/e2e/saga-idempotency.sh`. Run them sequentially: the selected payment token is global to the orchestrator worker. These are local integration tests, not concurrent-load or crash-recovery tests.
-
-All scripts preserve the stack and their records for inspection. The failure runner leaves the stack configured to decline payments. Run `./tests/e2e/happy-path-idempotency.sh` afterwards to restore successful payments and verify the happy path. The advanced runners stop booking processes before startup so the inbox-removal migration cannot race with old workers. To reuse an
-already running stack without rebuilding it:
-
-```bash
-E2E_SKIP_STACK_START=1 ./tests/e2e/happy-path.sh
-```
-
-In skip-start mode, images and migrations must already be current. The orchestrator worker must use `PAYMENT_METHOD_TOKEN=tok_fake_visa` for happy-path tests or `tok_decline` for the failure test. The advanced runners check that setting before creating a reservation.
-Increase the default 90-second timeout when needed:
-
-```bash
-E2E_TIMEOUT_SECONDS=180 ./tests/e2e/happy-path.sh
-```
-
-## Concurrent saga transitions (PostgreSQL)
-
-With the Compose stack already started:
-
-```bash
-./tests/integration/saga-concurrency.sh
-```
-
-The runner uses the existing orchestrator image/dependencies, mounts current orchestrator source and configuration, and creates an isolated PostgreSQL schema from the service migrations. It removes that schema afterwards without modifying application records. No PHPUnit installation or SQLite database is required.
-
-The runner first verifies the configured state-machine transition matrix, including rejection of invalid transitions and terminal/legacy states. Ten concurrency cases exercise all six existing-saga transition handlers through the real inbound Messenger bus. Two PHP processes preload the same saga, receive distinct message IDs and contend on its row. The test verifies the wait with `pg_blocking_pids`, then checks one committed transition and exactly one matching outbox message. It includes payment success/failure in both orders, seat-held/rejected in both orders, duplicate business events and rollback of the first transaction. Inbox claims are checked for commit/rollback too.
-
-This is a PostgreSQL/Messenger integration test; the separate E2E runners cover RabbitMQ delivery. It does not test concurrent initial saga creation or inventory seat contention.
-
-## Concurrent inventory holds (PostgreSQL)
-
-With PostgreSQL running and the inventory image already built:
-
-```bash
-./tests/integration/inventory-concurrency.sh
-```
-
-For a fresh setup, first run `docker compose up -d --wait postgres` and
-`docker compose build inventory`. RabbitMQ and the other services are not needed
-for this test; it dispatches directly through the real inbound Messenger bus.
-
-The runner creates an isolated schema from current inventory migrations, prepares
-a fresh seat per scenario, and removes its schema afterwards. Application records
-are untouched. Current source, configuration and migrations are mounted into the
-existing inventory image; rebuild that image when dependencies change.
-
-Two PHP processes preload `AVAILABLE` into independent EntityManagers and process
-`HoldSeats` with different reservation and message IDs. The first transaction stays
-open until an observer connection sees its PID in `pg_blocking_pids(T2)` and confirms
-that T2 is waiting on the seat `SELECT ... FOR UPDATE`, rather than on inbox deduplication.
-Signals between processes control ordering; a timeout fails the test if the expected
-wait never occurs. No arbitrary sleep is used to assume that contention happened.
-
-The terminal report is generated from these observations and assertions:
-
-- **T1 commit:** T2's original PHP object changes from `AVAILABLE` to `HELD/R1`;
-  exactly one active hold belongs to R1; outbox contains `SeatsHeld` for R1 and
-  `SeatHoldRejected` for R2 with the unavailable-seat reason.
-- **T1 rollback:** T2 succeeds; only R2's hold, success event and inbox claim remain.
-- An independent connection cannot see T1's uncommitted seat change, hold or outbox.
-
-State reported by each worker is read from the preloaded ORM object **after the
-handler returns**, without an extra refresh or locking query in the test.
-Successful completion prints `PASS: both inventory concurrency scenarios; isolated test schema removed.`;
-an assertion failure prints `FAIL` and exits with a nonzero status. PostgreSQL PIDs
-vary on each run.
-
-Scope: one seat, different reservations, `READ COMMITTED`. This does not verify
-same-reservation business duplicates, multi-seat deadlocks, HTTP/RabbitMQ delivery
-or load throughput. `tests/load/reservations.js` separately exercises HTTP acceptance.
-
-## Observe saga
-
-```bash
-# Saga state
-docker compose exec postgres psql -U ticketing -d orchestrator \
-  -c "SELECT reservation_id, state, updated_at FROM sagas ORDER BY updated_at DESC LIMIT 5;"
-
-# RabbitMQ queues
-open http://localhost:15673
-```
-
-To exercise payment failure and seat-release compensation, start the stack with:
+A newly accepted booking is `PENDING`; final confirmation follows asynchronously. The normal fake gateway succeeds. To reproduce a declined payment and seat release:
 
 ```bash
 PAYMENT_METHOD_TOKEN=tok_decline docker compose up -d --build
 ```
 
-The expected terminal state is `CANCELLED`, and the seat returns to `AVAILABLE`.
+Create a new reservation for available seats. Expected outcome: booking/saga `CANCELLED`, payment `FAILED`, seats `AVAILABLE`. Restore the default for subsequent successful checkouts:
 
-## Logs
+```bash
+PAYMENT_METHOD_TOKEN=tok_fake_visa docker compose up -d
+```
+
+## Verification
+
+The checks below cover service behavior, database contention and message replay. They do not include automated crash/restart or broker-outage scenarios; no CI or static-analysis gate is configured.
+
+### Service integration tests
+
+On the host, install dependencies inside each service directory. PHP must meet that service's `composer.json` requirements and have SQLite support. If the host lacks `ext-amqp`, Composer can ignore that requirement for local single-service work:
+
+```bash
+cd services/inventory-service
+composer install --ignore-platform-req=ext-amqp
+php bin/phpunit
+```
+
+Run the same commands from `services/payment-service` for the Payment suite. PHPUnit uses the service's test environment and rebuilds its SQLite schema with `SchemaTool`; do not point these tests at application data. PostgreSQL migrations are not applied to that SQLite database. The inbox table is unmapped infrastructure, so the consumer tests create it explicitly.
+
+The [Inventory suite](../services/inventory-service/tests/) covers catalog reads, sequential hold attempts and duplicate transport delivery. The [Payment suite](../services/payment-service/tests/) covers success/failure, repeat processing, gateway call counts and inbox rollback/redelivery. These are Symfony/Doctrine integration tests; there is no separate isolated unit-test suite. Despite its name, `SeatHoldConcurrencyTest` makes sequential attempts on SQLite and does not verify PostgreSQL locking.
+
+### PostgreSQL concurrency tests
+
+After starting the stack:
+
+```bash
+./tests/integration/inventory-concurrency.sh
+./tests/integration/saga-concurrency.sh
+```
+
+These runners use service images and create isolated PostgreSQL schemas, then clean them up without modifying application records. They dispatch through the real inbound Messenger bus without RabbitMQ. The Inventory runner mounts source, configuration and migrations; the saga runner mounts source/configuration and uses migrations from its image. Rebuild when dependencies or unmounted files change. PHPUnit is not required.
+
+For Inventory-only verification from a fresh checkout:
+
+```bash
+docker compose up -d --wait postgres
+docker compose build inventory
+./tests/integration/inventory-concurrency.sh
+```
+
+The [Inventory runner](../tests/integration/inventory-concurrency.php) uses two processes with preloaded seat objects and distinct reservation/message IDs. At `READ COMMITTED`, it observes `pg_blocking_pids` and the waiting seat query, checks that uncommitted writes remain invisible, then verifies commit/rejection and rollback/success outcomes for seats, holds, outbox rows and inbox claims. Scope: one seat; no multi-seat or same-reservation business-duplicate contention.
+
+The runner prints observations and assertions, ending with `PASS: both inventory concurrency scenarios; isolated test schema removed.` on success. Failed assertions exit nonzero.
+
+The [saga runner](../tests/integration/saga-concurrency.php) checks the transition matrix and ten competing-handler cases across six transitions, including success/failure events in both orders and rollback. Processes preload stale saga objects, use distinct message IDs and observe actual lock waits before checking committed state and outgoing work. Scope: existing sagas through the inbound bus; concurrent initial creation and HTTP idempotency-key races are not tested.
+
+### RabbitMQ end-to-end tests
+
+Run these sequentially:
+
+```bash
+./tests/e2e/happy-path.sh
+./tests/e2e/happy-path-idempotency.sh
+./tests/e2e/payment-failure.sh
+```
+
+The basic runner checks booking/saga `CONFIRMED`, seats `SOLD` and payment `PAID`. The other two use the [shared runner](../tests/e2e/saga-idempotency.sh), which republishes every outbox row for the reservation under its original message ID. It checks inbox claims in three services and unchanged states, row/outbox counts, payment/hold records, seat revision and saga timestamp. Booking is checked without an inbox table.
+
+The failure case also checks `PAYMENT_DECLINED`, failure timestamps, released seat ownership and the absence of payment-success/confirmation messages. Replay covers identical deliveries, not competing business events with different IDs or conflicting terminal events. All runners seed unique records and preserve the stack/data for inspection.
+
+The selected payment token is global to the Orchestrator worker. The failure runner leaves it set to `tok_decline`; run `./tests/e2e/happy-path-idempotency.sh` afterwards to restore successful payments and verify that path. Advanced runners stop old Booking processes before migrations so removing the historical inbox table cannot race with an old worker. For manual upgrades, follow the same order: [the forward migration](../services/booking-service/migrations/Version20260923120000.php) drops the table; rollback recreates it empty, without historical claims.
+
+To reuse current images, migrations and an already running stack:
+
+```bash
+E2E_SKIP_STACK_START=1 ./tests/e2e/happy-path.sh
+```
+
+In skip-start mode, ensure the Orchestrator worker has `PAYMENT_METHOD_TOKEN=tok_fake_visa` for happy-path tests or `tok_decline` for failure tests. Advanced runners check that setting. Increase the default 90-second timeout when needed:
+
+```bash
+E2E_TIMEOUT_SECONDS=180 ./tests/e2e/happy-path.sh
+```
+
+### HTTP load tests
+
+See [k6 commands and measurement scope](../tests/load/README.md).
+
+## Inspect or reset local state
 
 ```bash
 docker compose logs -f orchestrator-worker booking-outbox-relay
+
+docker compose exec postgres psql -U ticketing -d orchestrator \
+  -c "SELECT reservation_id, state, updated_at FROM sagas ORDER BY updated_at DESC LIMIT 5;"
 ```
 
-## Bare-metal (without Docker)
+Inspect queue depth in [RabbitMQ management](http://localhost:15673). If an E2E runner times out, use its recent worker/relay logs and `docker compose ps` to check startup, migrations and the configured payment token.
 
-Per-service `composer install` + local SQLite in `.env` + `sync://` messenger. **Does not connect services** — use only for single-service work or PHPUnit. Cross-service flow requires Docker stack or manual RabbitMQ setup matching `config/packages/messenger.yaml` queue names.
+Compose uses `php -S`, one PostgreSQL instance and one RabbitMQ broker, with topology declared by Messenger. Relays poll every second and ignore nonzero exits with `|| true`, so a running relay container alone does not prove publication is succeeding. Correlation IDs are present in messages, but there is no application-wide logging/tracing pipeline or failed-message recovery workflow. See [delivery boundaries](architecture.md#5-reliable-delivery-and-duplicate-requests) when diagnosing stalled work.
 
-For `composer install` on host without `ext-amqp`:
+To remove all local database data and recreate the stack:
 
 ```bash
-composer install --ignore-platform-req=ext-amqp
+docker compose down -v
+docker compose up -d --build
 ```
 
-## Compose layout (reference)
+## Bare-metal scope
 
-```text
-e2e-ui (nginx proxy) ── booking / inventory / orchestrator HTTP
-
-postgres ──┬── booking-migrate → booking (+ worker + outbox-relay)
-           ├── orchestrator-migrate → orchestrator (+ worker + outbox-relay)
-           ├── inventory-migrate → inventory (+ worker + outbox-relay)
-           └── payment-migrate → payment worker + outbox-relay
-
-rabbitmq ← all PHP services (AMQP)
-```
-
-See `docs/current-state.md` for implementation status and known gaps.
-
-To override the RabbitMQ host ports:
-
-```bash
-RABBITMQ_AMQP_PORT=5674 RABBITMQ_MANAGEMENT_PORT=15674 docker compose up -d
-```
+Per-service SQLite and `sync://` support local single-service work only. Cross-service execution requires the Compose PostgreSQL/RabbitMQ setup or equivalent manual configuration matching each service's Messenger routing. See [architecture](architecture.md) for ownership and transaction boundaries.

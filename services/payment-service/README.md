@@ -1,20 +1,12 @@
-# payment-service
+# Payment service
 
-Worker-only service with a deliberately small payment model: `PENDING → PAID | FAILED`.
+Worker-only service that consumes `ProcessPayment` and records a payment outcome. Its stored lifecycle is `PENDING → PAID | FAILED`.
 
-## Scope (MVP)
+| Code | Responsibility |
+|------|----------------|
+| [PaymentService](src/Service/PaymentService.php) | Process a reservation payment and record its outcome |
+| [PaymentGatewayInterface](src/Gateway/PaymentGatewayInterface.php) | Gateway request/result boundary |
+| [FakePaymentGateway](src/Gateway/FakePaymentGateway.php) | `tok_decline` returns a declined result; other tokens succeed |
+| [Consumer test](tests/MessageHandler/ProcessPaymentIdempotencyTest.php) | Duplicate delivery and claim rollback |
 
-| Command | Result |
-|---------|--------|
-| `ProcessPayment` | `PaymentSucceeded` |
-| `ProcessPayment` with `tok_decline` | `PaymentFailed` |
-
-Authorization, capture, void, refund, and a real provider integration are intentionally out of scope.
-
-## Commands
-
-```bash
-composer install
-php bin/console doctrine:migrations:migrate
-php bin/console app:outbox:relay
-```
+Use [development setup](../../docs/dev-setup.md) for the worker runtime and controlled failure scenario. [Project scope](../../README.md#scope-and-limitations) records provider and recovery limits; [transaction boundaries](../../docs/architecture.md#3-transaction-boundaries) describe the gateway call's placement.

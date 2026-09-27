@@ -1,21 +1,17 @@
-# Ticketing
+# Distributed Ticketing System
 
-Ticket reservation across four services: hold seats, process payment, then confirm the booking or release the seats on failure.
+A production-oriented engineering sandbox for reservation correctness across four backend services: hold seats, process payment, then confirm or compensate. It focuses on concurrency, transaction boundaries, reliable messaging and failure handling; it is not a complete production ticketing platform.
 
-Each service owns its database. An orchestrated saga coordinates the workflow over RabbitMQ, with transactional outboxes and idempotent consumers. PostgreSQL integration tests exercise competing seat holds and saga transitions; E2E tests cover successful bookings, payment failure, and repeated message delivery.
+**Stack:** PHP · Symfony · Doctrine · PostgreSQL · RabbitMQ · Docker Compose
 
-**Stack:** PHP · Symfony · PostgreSQL · RabbitMQ · Docker Compose
+## Why this project exists
 
-## Design
-
-- Concurrent reservations, transaction boundaries, and database locking.
-- Idempotent APIs and consumers under at-least-once delivery.
-- Reliable messaging with transactional Outbox / Inbox patterns.
-- Saga coordination, compensation, and eventual consistency.
+- Prevent competing reservations from acquiring the same seat.
+- Coordinate a checkout across independently committed databases.
+- Preserve outgoing work when publishing fails and tolerate duplicate delivery.
+- Release held seats after payment failure.
 
 ## Architecture
-
-Booking, Inventory, Payment, and Orchestrator each own a separate PostgreSQL database and communicate through RabbitMQ.
 
 ```mermaid
 flowchart LR
@@ -71,11 +67,20 @@ flowchart LR
     linkStyle 1,2,3,4,5,6,7,8,9,10 stroke:#d97706,stroke-width:2px,stroke-dasharray:6 4
 ```
 
-Diagram source: [reservation-container.mmd](docs/diagrams/reservation-container.mmd).
+Booking owns reservations, Inventory owns the catalog and seats, Payment owns payment outcomes, and Orchestrator coordinates the workflow. Each service owns a PostgreSQL database. [Diagram source](docs/diagrams/reservation-container.mmd).
 
-## Reservation flow
+## Key engineering decisions
 
-The booking API accepts the request and records an outbox event. The saga then coordinates seat holding, payment, and confirmation or compensation.
+- [PostgreSQL row locks](docs/architecture.md#6-concurrency-acquiring-seats) for multi-seat read → validate → modify operations, acquired in sorted order.
+- [Transactional outboxes](docs/architecture.md#publishing-committed-work) for publishing committed work through separate relays.
+- [Transactional inbox claims](docs/architecture.md#handling-repeated-delivery) for duplicate messages; Booking uses repeat-safe status updates.
+- [Saga orchestration](docs/architecture.md#4-distributed-workflow-and-failure-recovery) for explicit workflow state and payment-failure compensation.
+
+## Example flow
+
+Reservation → seat hold → payment → seats sold → reservation confirmed.
+
+HTTP `202` acknowledges creation; the final outcome arrives asynchronously.
 
 <details>
 <summary>Reservation creation: HTTP, idempotency, and outbox</summary>
@@ -95,8 +100,36 @@ The booking API accepts the request and records an outbox event. The saga then c
 
 </details>
 
-## Run and explore
+## Running locally
 
-Start with the [development setup](docs/dev-setup.md) for Docker Compose, the Reservation Console, and verification commands. See the [architecture guide](docs/architecture.md) for boundaries and trade-offs, and [current state](docs/current-state.md) for implemented scenarios and open work.
+With Docker and Docker Compose v2, run from the repository root:
 
-The payment gateway is fake; hold expiry, late-payment compensation, and a failed-message transport remain open work. Load testing is currently limited to HTTP acceptance.
+```bash
+docker compose up -d --build
+docker compose exec inventory-worker php bin/console app:inventory:seed-seats sample-show A1 A2 --name="Sample Show"
+```
+
+Open the [Reservation Console](http://localhost:8082). See [development setup](docs/dev-setup.md) for HTTP requests, ports and troubleshooting.
+
+## Tests
+
+- [Inventory](services/inventory-service/tests/) and [payment](services/payment-service/tests/) PHPUnit suites exercise service behavior and duplicate delivery through Symfony and Doctrine; these are integration tests, not a separate unit-test suite.
+- Real PostgreSQL contention: [seat holds](tests/integration/inventory-concurrency.sh) and [saga transitions](tests/integration/saga-concurrency.sh), including commit and rollback.
+- RabbitMQ E2E: [happy path + redelivery](tests/e2e/happy-path-idempotency.sh) and [payment failure + redelivery](tests/e2e/payment-failure.sh).
+- [k6 HTTP acceptance tests](tests/load/README.md); completed-checkout throughput is not measured.
+
+[Test commands and coverage limits](docs/dev-setup.md#verification)
+
+## Scope and limitations
+
+- Payment uses a fake gateway and configured amount/currency; there is no real provider integration or checkout pricing.
+- Holds store an expiry timestamp, but expiration and abandoned-checkout compensation are not implemented.
+- Late or uncertain payment outcomes have no reconciliation, void or refund path.
+- Verification covers single-seat contention and existing-saga transitions; multi-seat contention, crash recovery and completed-checkout throughput remain unverified.
+- Runtime targets local Docker Compose. Production retry/DLQ handling, observability and deployment are not configured.
+
+## Documentation
+
+- [Architecture and implementation entry points](docs/architecture.md)
+- [Development setup and verification](docs/dev-setup.md)
+- [Component and sequence diagrams](docs/diagrams/)

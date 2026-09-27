@@ -1,374 +1,137 @@
-# Architecture — Ticketing Reservation + Payment Saga
+# Architecture
 
-Service boundaries, transaction guarantees, and the reservation workflow.
+This system coordinates seat reservations and payment across four service-owned databases. This guide records the boundaries, decisions and their trade-offs. See the [README](../README.md#scope-and-limitations) for project scope and [development setup](dev-setup.md#verification) for commands and verification coverage.
 
-## 1. Purpose
+## 1. Service boundaries and data ownership
 
-The system coordinates seat reservations and payment across separate databases. Its design addresses three concerns:
+| Service | Owns | Implementation entry point |
+|---------|------|----------------------------|
+| Booking | Reservation API, buyer details, idempotency key, user-visible status | [ReservationService](../services/booking-service/src/Service/ReservationService.php) |
+| Inventory | Show catalog, seat state and reservation holds | [SeatHoldService](../services/inventory-service/src/Service/SeatHoldService.php) |
+| Payment | Payment record and gateway result | [PaymentService](../services/payment-service/src/Service/PaymentService.php) |
+| Orchestrator | Workflow state and the next command or terminal event | [SagaCoordinator](../services/orchestrator-service/src/Saga/SagaCoordinator.php) |
 
-- Concurrent reservations must not sell the same seat twice.
-- Repeated message delivery must not repeat a completed business operation.
-- Payment failure must release held seats and cancel the reservation.
+No service reads or writes another service's tables. Compose hosts four logical databases on one PostgreSQL instance; see [database bootstrap](../ops/postgres/init/01-databases.sql). Inventory decides seat availability and ownership; Payment decides payment outcomes. Orchestrator coordinates these decisions without implementing their business rules.
 
-Hold expiry and recovery from an uncertain payment outcome remain open work. See [current state](current-state.md) for the implemented scenarios and test coverage.
+The [container diagram](diagrams/reservation-container.mmd) shows components and RabbitMQ routing. The development [Reservation Console](../ops/e2e-ui/) proxies HTTP reads and reservation creation to the services.
 
-## 2. System context
+## 2. Communication boundaries
 
-```text
-Client
-  → booking-service     (HTTP: create reservation, idempotency-key)
-  → orchestrator-service (saga lifecycle, saga state API)
-        ↓ commands (RabbitMQ)
-  → inventory-service   (hold / release / confirm seats)
-  → payment-service     (process payment)
-        ↑ events (RabbitMQ)
-  → orchestrator-service (process manager reacts, sends next command)
-  → booking-service     (updates reservation status from events)
-```
+HTTP handles reservation creation and reads: [Booking API](../services/booking-service/src/Controller/ReservationController.php), [catalog](../services/inventory-service/src/Controller/ShowController.php), [show seats](../services/inventory-service/src/Controller/ShowSeatsController.php), and [saga state](../services/orchestrator-service/src/Controller/SagaController.php). A new reservation returns `202` after its local transaction commits; it does not wait for seat availability or payment.
 
-Each box is a separate deployable with its **own PostgreSQL database**.
+Cross-service writes use commands and events through the RabbitMQ `ticketing` direct exchange:
 
-## 3. Services and responsibilities
+| Destination queue | Messages | Routing configuration |
+|-------------------|----------|-----------------------|
+| `orchestrator.queue` | `ReservationRequested`, inventory outcomes, payment outcomes | [Orchestrator Messenger](../services/orchestrator-service/config/packages/messenger.yaml) |
+| `inventory.queue` | `HoldSeats`, `ConfirmSeats`, `ReleaseSeats` | [Inventory Messenger](../services/inventory-service/config/packages/messenger.yaml) |
+| `payment.queue` | `ProcessPayment` | [Payment Messenger](../services/payment-service/config/packages/messenger.yaml) |
+| `booking.queue` | `ReservationConfirmed`, `ReservationCancelled` | [Booking Messenger](../services/booking-service/config/packages/messenger.yaml) |
 
-| Service | Owns | Must not |
-|---------|------|----------|
-| **booking-service** | `Reservation` user status, HTTP API, outbox `ReservationRequested` | Hold seats, charge cards, `Show` catalog |
-| **inventory-service** | `Show` catalog, `Seat` states, `SeatHold`, hold/release/confirm | Payment, saga coordination |
-| **payment-service** | `Payment` lifecycle, gateway adapter | Seat logic, saga coordination |
-| **orchestrator-service** | `Saga` aggregate, transitions, saga query API | Business rules for seats or money |
+Compose runs a worker and an outbox relay for each service. Messenger declares queues through `auto_setup`. Bare-metal `sync://` configuration only supports single-process work; it does not connect services.
 
-### booking-service
+## 3. Transaction boundaries
 
-- `POST /api/reservations` with a required `Idempotency-Key` header.
-- Publishes `ReservationRequested` (via outbox).
-- Consumes terminal events: `ReservationConfirmed`, `ReservationCancelled`.
+| Operation | Writes committed together in one service database |
+|-----------|---------------------------------------------------|
+| Create reservation | `reservations` + outbox `ReservationRequested` |
+| Hold / confirm / release seats | Inbox claim + seat and hold changes + inventory outcome in outbox |
+| Reject seat hold | Inbox claim + outbox `SeatHoldRejected`; no seats acquired |
+| Process payment | Inbox claim + payment result + payment outcome in outbox |
+| Advance workflow | Inbox claim + saga change + next command or terminal event in outbox |
+| Update Booking status | Reservation status only; inbound bus retains `doctrine_transaction` |
 
-### inventory-service
+Inbound transaction middleware encloses the inbox and handler. Services start a transaction when called directly or join the handler's active transaction. The [outbox recorder](../services/booking-service/src/Outbox/OutboxRecorder.php) persists through the same EntityManager as the business write.
 
-- Consumes `HoldSeats`, `ReleaseSeats`, `ConfirmSeats`.
-- Publishes `SeatsHeld`, `SeatHoldRejected`, `SeatsReleased`, `SeatsConfirmed`.
-- **Seat hold** uses ORM **pessimistic lock** (see §6). Conditional `UPDATE` documented as comparison alternative.
+There is no transaction spanning PostgreSQL databases or RabbitMQ. Booking can remain `PENDING` while Inventory has already held seats or Payment has completed. Confirmation is reported only after the seat-confirmation outcome reaches Orchestrator and then Booking.
 
-### payment-service
+The current payment gateway is a local fake called inside the payment transaction. Its request uses `reservationId` as the gateway idempotency key. An external charge could survive a local rollback, so this boundary and its tests do not establish real-provider duplicate-charge safety.
 
-- Consumes `ProcessPayment`.
-- Publishes `PaymentSucceeded` or `PaymentFailed`.
-- `FakePaymentGateway` with configurable failures for reproducible local scenarios.
+## 4. Distributed workflow and failure recovery
 
-### orchestrator-service
+The [reservation-creation sequence](diagrams/reservation-flow-sequence.svg) traces HTTP handling, idempotency and the local transaction. The [saga sequence](diagrams/reservation-saga-sequence.svg) traces confirmation, seat rejection and payment-failure compensation. PlantUML sources: [creation](diagrams/reservation-flow-sequence.puml), [saga](diagrams/reservation-saga-sequence.puml).
 
-- Consumes `ReservationRequested` and domain events from inventory/payment.
-- Sends next command in the saga; runs compensations on failure.
-- `GET /api/saga/{reservationId}` returns the current state.
-- Expiry scheduling and transition history are pending.
+Orchestrator gives checkout progress and compensation one inspectable state. Choreography would distribute that coordination across services; a synchronous service chain would couple HTTP latency and availability to downstream work while still needing partial-failure recovery. The cost of the current choice is another service/database and a dependency on Orchestrator for checkout progress.
 
-**Implemented so far:** full happy-path coordinator (`ReservationRequested` → `HoldSeats` → … → `ReservationConfirmed`); current-state `GET /api/saga/{reservationId}` query (transition history is still pending); seat-hold rejection → `ReservationCancelled`; payment failure → release → cancellation. Cross-service runtime is wired through root `docker-compose.yml` + RabbitMQ, and automated happy-path and payment-failure runners verify terminal outcomes and duplicate redelivery — see `docs/current-state.md`.
+[workflow.yaml](../services/orchestrator-service/config/packages/workflow.yaml) centralizes the six transitions instead of repeating the graph in handlers. Symfony's method marking store reads/writes the persisted `SagaState` enum without a Workflow dependency in the entity. [SagaCoordinator](../services/orchestrator-service/src/Saga/SagaCoordinator.php) explicitly records outbound work after `can()` / `apply()`; no Workflow listeners perform side effects.
 
-## 4. Saga flow
+Different message IDs can compete to advance one reservation. [SagaRepository](../services/orchestrator-service/src/Repository/SagaRepository.php) therefore locks and refreshes the existing saga before the state check, with the transition and outgoing message committed together. Different saga rows can advance independently. Conditional updates would require reconciling DBAL writes with ORM state; optimistic version checks would require conflict retries. Keep network calls outside the locked section.
 
-### Happy path
+A payment decline moves the saga into `COMPENSATING`. Cancellation follows `SeatsReleased`; a rejected initial hold cancels directly. Release is a new Inventory transaction. Previously committed transactions in other services remain committed.
 
-```text
-AWAITING_SEATS
-  → AWAITING_PAYMENT
-  → PAYMENT_PAID
-  → CONFIRMED
-```
+The first committed valid transition wins. Missing sagas and disallowed transitions are no-ops, including events for the legacy `SEATS_HELD` state. This does not recover a late successful payment. Initial creation has no existing row to lock: it inserts `AWAITING_SEATS` and `HoldSeats` under a unique reservation constraint, relying on transport retry for concurrent insert conflicts.
 
-Steps:
+Inventory confirmation/release returns without an outcome when a hold is absent/inactive or seat ownership checks fail. The saga can then remain `PAYMENT_PAID` or `COMPENSATING`. `GET /api/saga/{reservationId}` exposes current state and failure reason, without transition history or automatic reconciliation.
 
-1. Client reserves → `ReservationRequested`.
-2. Orchestrator → `HoldSeats`.
-3. Inventory → `SeatsHeld`.
-4. Orchestrator → `ProcessPayment`.
-5. Orchestrator → `ConfirmSeats` → `ReservationConfirmed`.
+[Saga concurrency tests](../tests/integration/saga-concurrency.php) verify competing transitions; [payment-failure E2E](../tests/e2e/payment-failure.sh) verifies compensation over RabbitMQ. Their [coverage limits](dev-setup.md#verification) distinguish these checks from untested creation races and crash recovery.
 
-### Compensation / terminal failure
+## 5. Reliable delivery and duplicate requests
 
-```text
-AWAITING_PAYMENT
-  → COMPENSATING
-  → CANCELLED
-```
+### Publishing committed work
 
-Examples:
+Each publishing service writes outgoing messages with its business changes. The [Booking relay](../services/booking-service/src/Command/OutboxRelayCommand.php) shows the publication path: read committed rows, dispatch them, then flush publication markers for the batch. Failure before that flush can republish messages already sent. Relays do not claim rows for parallel publishers.
 
-- After `SeatsHeld`, payment fails → `ReleaseSeats` → `CANCELLED`.
-- Seat-hold rejection transitions directly from `AWAITING_SEATS` to `CANCELLED`.
+Publishing directly after commit would leave a failure window that loses the next step; publishing before commit could expose work that later rolls back. The outbox retains publication intent at the cost of polling latency, message storage and duplicate delivery. Database change capture would replace polling with connector infrastructure and additional operational state.
 
-Compensation is a separate committed operation in each affected service. Expiry and late-payment handling are not yet implemented.
+The outbox UUID becomes the AMQP `message_id`; republishing the same row retains that ID. `correlationId` travels in message payloads and the AMQP `correlation_id` attribute. Orchestrator's [relay](../services/orchestrator-service/src/Command/OutboxRelayCommand.php) selects `command.bus` for commands and `event.bus` for terminal events, preserving the receiving bus through Messenger's `BusNameStamp`.
 
-## 5. Cross-cutting concerns
+### Handling repeated delivery
 
-### 5.1 Orchestration vs choreography
+Inventory, Payment and Orchestrator place `doctrine_transaction` before [inbox middleware](../packages/messenger-idempotency/src/IdempotencyMiddleware.php). The [claim store](../packages/messenger-idempotency/src/InboxMessageStore.php) inserts `(consumer_name, message_id)` with `ON CONFLICT DO NOTHING`; duplicate claims skip the handler. A failed handler rolls back its claim with the business and outbox writes. A separate transaction or external cache could not make these writes atomic.
 
-**Chosen: orchestration** (central process manager in `orchestrator-service`).
+Claims cost storage and one write per received message. The middleware only checks transport deliveries and rejects missing stable IDs as unrecoverable. Consumer names are `inventory_commands`, `process_payment` and `orchestrator_events`. Deduplication does not serialize different message IDs for the same reservation; the saga and seat locks address that separately.
 
-- Explicit saga state and easier recovery after crashes.
-- Trade-off: orchestrator must stay thin; alternative (choreography) documented in ADR when relevant.
+Booking's terminal handlers only update status, so they retain transaction middleware and status guards without an inbox. Reassess that choice if they gain outgoing messages or external calls. Their guards are asymmetric: confirmation can replace cancellation; cancellation only accepts `PENDING`. Identical-event replay does not establish safe ordering of conflicting terminal events.
 
-### 5.2 Transactional outbox
+Seat unavailability and payment decline produce outcome events, completing the handler normally. They do not trigger technical retries. Transport failures and thrown technical errors use the currently configured Messenger behavior.
 
-Pattern in **every** service that publishes events:
+[Payment consumer tests](../services/payment-service/tests/MessageHandler/ProcessPaymentIdempotencyTest.php) count gateway calls and check claim rollback; [Inventory consumer tests](../services/inventory-service/tests/MessageHandler/HoldSeatsIdempotencyTest.php) deliver one envelope twice. [Redelivery E2E](../tests/e2e/saga-idempotency.sh) checks unchanged business state and message counts after republishing.
 
-1. In one DB transaction: apply business change + insert into `outbox_messages`.
-2. Separate relay/worker publishes to RabbitMQ after commit.
-3. Consumers treat delivery as **at-least-once**.
+### Duplicate HTTP requests
 
-Never publish to the broker in the same logical operation without outbox unless in a `sync` prototype with a clear TODO.
+For HTTP creation, [ReservationService](../services/booking-service/src/Service/ReservationService.php) compares `showId`, normalized seat IDs and buyer fields against the stored `Idempotency-Key`. Matching requests return the same reservation with its current status; a changed payload maps to HTTP `409`. A missing/empty key returns `400`; request constraint violations return `422`.
 
-### 5.3 Idempotency
+The database has a unique key constraint. The concurrent-insert catch clears but does not reset the EntityManager closed by a failed `wrapInTransaction`; recovery of concurrent HTTP duplicates is unverified.
 
-- **HTTP:** `Idempotency-Key` on `POST /reservations`.
-- **Consumers:** inventory, payment and orchestrator use an `inbox_messages` table + Messenger middleware **before** handler. Booking uses idempotent reservation status updates without an inbox and retains the transaction middleware. Use `(consumer_name, message_id)` as the deduplication key when one service can have multiple logical consumers.
-- On duplicate `HoldSeats` for the same reservation: second processing must be a no-op or return the same outcome.
-- The outbox row id is propagated as the native AMQP `message_id`, so republishing the same outbox row retains the same identity. Consumers use the resulting Messenger `TransportMessageIdStamp` as the `inbox_messages` deduplication key.
-- **Do not retry** unrecoverable business errors (`Seat unavailable`, `Payment declined`) — use `UnrecoverableMessageHandlingException` or zero retries for those types.
+## 6. Concurrency: acquiring seats
 
-### Saga transition graph
+Inventory owns `Show`, `Seat` and `SeatHold`. A show has unique seat codes; API and message `seatIds` are seat UUIDs, not display codes such as `A12`. `showId` identifies the catalog show; classes under `Ticketing\Contracts\Event` are messages.
 
-Orchestrator uses Symfony Workflow with `type: state_machine`. `services/orchestrator-service/config/packages/workflow.yaml` defines the six named transitions of the current saga. Symfony’s standard `MethodMarkingStore` reads and writes the persisted `SagaState` enum through `getState()` / `setState()`, without Workflow dependencies in the entity. The legacy `SEATS_HELD` value remains recognized but has no transitions.
+[SeatLockingService](../services/inventory-service/src/Service/SeatLockingService.php) deduplicates and sorts requested IDs. [SeatRepository::findForUpdateByShowAndIds()](../services/inventory-service/src/Repository/SeatRepository.php) locks each row in that order with `PESSIMISTIC_WRITE` and refreshes managed state with `HINT_REFRESH`. Only after all requested rows belong to the show and are available does the service modify any seat. Confirmation and release use the same ordering and check reservation ownership.
 
-After acquiring the saga row lock, the coordinator checks `can()` and calls `apply()`. Unavailable transitions remain no-ops for repeated or late events. Command/event creation stays explicit in the coordinator, with no Workflow listeners for outbox writes. See [ADR 0010](adr/0010-saga-state-machine.md).
+Seat transitions are `AVAILABLE → HELD → SOLD`, or `HELD → AVAILABLE` on release. [SeatHoldService](../services/inventory-service/src/Service/SeatHoldService.php) records the hold and outcome within the transaction in §3.
 
-### Saga transition concurrency
+Individual row acquisition adds a query per seat but makes the acquisition order explicit. The trade-off assumes small seat sets. Contended requests wait, so keep the transaction short and free of network calls. Sorted acquisition reduces inconsistent ordering without proving all surrounding operations deadlock-free.
 
-For an existing saga, the coordinator starts or joins the handler transaction, loads the row through `SagaRepository::findForUpdateByReservationId` (`PESSIMISTIC_WRITE` + `Query::HINT_REFRESH`), then checks the expected state. The state change and next outbox record commit together. Different message IDs for the same reservation are serialized by the saga row lock, independently of inbox deduplication.
+A conditional `UPDATE ... WHERE state = 'AVAILABLE'` is an alternative when the decision fits one atomic transition. Multi-seat acquisition would need an affected-row check against the normalized request count and rollback of partial acquisition before recording rejection. It still contends on rows; that implementation and benchmark do not exist here. Optimistic version checks would instead require conflict retries on popular seats; an unlocked read followed by a write cannot enforce the hold decision.
 
-The first committed valid transition wins under the current state rules. This does not define recovery for a genuinely late successful payment after cancellation; that remains an expiry/reconciliation design concern. Creating a missing saga is still protected by the unique reservation key, not a row lock on an absent row.
+The [PostgreSQL contention runner](../tests/integration/inventory-concurrency.php) observes real lock waits with two processes and verifies both commit/rejection and rollback/success. Its scope is one seat and different reservations; it does not establish multi-seat deadlock freedom or flash-sale capacity.
 
-The PostgreSQL integration runner uses two processes, preloaded stale ORM objects and `pg_blocking_pids` to verify actual lock contention. See [ADR 0009](adr/0009-saga-transition-locking.md).
+## 7. Shared code boundaries
 
-### 5.4 Correlation
+- [contracts/](../contracts/src/) contains framework-independent command/event DTOs. Composer path dependencies and PHP class names simplify this monorepo but couple producers and consumers to constructor and serialization shapes. A schema-only contract would require a separate compatibility policy.
+- [packages/messenger-idempotency/](../packages/messenger-idempotency/src/) contains Symfony Messenger middleware and a DBAL claim store. Sharing this algorithm keeps infrastructure fixes consistent without adding framework dependencies to `contracts/`. Each consuming service owns its migrations, table, consumer name and bus configuration. There is no shared ORM entity; schema changes require coordinated package and service migrations.
 
-- `correlationId` (and optionally `sagaId`, `reservationId`) in:
-  - HTTP headers
-  - RabbitMQ message headers / stamps
-  - structured logs (Monolog processor)
+Entities, repositories and business services remain local to their owning service.
 
-### 5.5 Observability (MVP)
+## 8. Symfony layering
 
-- Structured logs: `correlationId`, `reservationId`, `sagaState` on each transition.
-- Saga state HTTP endpoint.
-- Failed messages → failure transport / DLQ; monitor queue depth.
+Services use flat Symfony folders. Separate request/response DTOs and mappers let the HTTP contract change independently of Doctrine mappings, at the cost of additional files per endpoint. No `Domain/` or `Application/` hierarchy is needed for these boundaries.
 
-## 6. Inventory: seat hold and concurrency
+| Folder / configuration | Responsibility | Excluded dependencies |
+|------------------------|----------------|-----------------------|
+| `Controller/` | Routes, headers, `MapRequestPayload`, JSON responses | Business rules, Doctrine access |
+| `Dto/` | Readonly request/response contracts; input validation | Doctrine and persistence logic |
+| `Mapper/` | Entity → response DTO | HTTP, transactions, business decisions |
+| `Entity/` | ORM mapping, persistence state and state transitions | API shape, `toResponse()`, `matchesRequest()`, Request DTOs, HTTP exceptions, Messenger |
+| `Repository/` | Queries and persistence helpers | HTTP and API mapping |
+| `Service/` | Use cases, transactions and idempotency | `JsonResponse`, HTTP exceptions, raw arrays as API responses |
+| `Exception/` | Business errors extending `DomainException` | Extending `HttpException` |
+| `config/packages/framework.yaml` | Map domain errors to HTTP status codes | Business decisions |
+| `MessageHandler/` | Adapt a command/event to a service or coordinator | HTTP concerns |
+| `Outbox/` | Record outgoing messages in the caller's transaction | Broker publication before commit |
+| `Saga/` | Orchestrator workflow coordination | Seat or payment business rules |
 
-### Domain model (inventory DB)
+Reference path: [ReservationController](../services/booking-service/src/Controller/ReservationController.php) → [CreateReservationRequest](../services/booking-service/src/Dto/CreateReservationRequest.php) → [ReservationService](../services/booking-service/src/Service/ReservationService.php) → [ReservationMapper](../services/booking-service/src/Mapper/ReservationMapper.php) → [ReservationResponse](../services/booking-service/src/Dto/ReservationResponse.php). [framework.yaml](../services/booking-service/config/packages/framework.yaml) maps the idempotency mismatch to `409`.
 
-- **`Show`** — ticketing show (concert, match). Table `shows`. Field **`showId`** in contracts/API.
-- **`Seat`** — `ManyToOne` → `Show`; unique `(show_id, seat_code)`.
-- **`SeatHold`** — one active hold per `reservationId`.
-
-**Naming:** `Ticketing\Contracts\Event\*` = **Messenger/saga messages** (`ReservationRequested`, …). **`Show`** = **domain catalog**, not a message class.
-
-### State machine (per seat)
-
-```text
-AVAILABLE → HELD → SOLD
-           ↘ (release) → AVAILABLE
-```
-
-### Current implementation (`inventory-service`)
-
-ORM transaction with **`LockMode::PESSIMISTIC_WRITE`** (`SeatRepository::findForUpdateByShowAndIds` + `SeatHoldService`):
-
-1. Service sorts `seatIds` (stable lock order → fewer deadlocks).
-2. Repository: `SELECT … FOR UPDATE` per seat id (persistence only), with `HINT_REFRESH` so a seat already managed by Doctrine reflects the state committed while the query waited for the lock.
-3. Service: all ids found for `showId`, all `AVAILABLE` → `Seat::holdFor()` (entity enforces FSM).
-4. Same transaction: `seat_holds` + outbox `SeatsHeld` or `SeatHoldRejected`.
-
-Release mirrors via `tryReleaseSeats` + `Seat::releaseFor()`.
-
-`tests/Service/SeatHoldConcurrencyTest.php` remains a sequential SQLite state/idempotency test. The PostgreSQL runner `tests/integration/inventory-concurrency.sh` uses two PHP processes with preloaded ORM objects and distinct reservation/message IDs. It confirms actual seat-lock contention with `pg_blocking_pids` and the waiting SQL, then verifies commit/rejection and rollback/success outcomes, one active hold, outbox payloads and inbox commit/rollback. It generates a readable report and cleans up its isolated schema. See `docs/dev-setup.md` for the command and scope; same-reservation business duplicates and multi-seat contention remain outside this test.
-
-### Alternative hot path (flash-sale comparison)
-
-Documented for benchmarks / ADR — **not** current default code:
-
-```sql
-UPDATE seats
-SET state = 'HELD', held_by_reservation_id = :reservationId
-WHERE show_id = :showId AND id IN (:ids) AND state = 'AVAILABLE';
-```
-
-- If `affected_rows !== count(seatIds)` → reject entire hold.
-- Avoids lock queues vs pessimistic `FOR UPDATE` on contested rows; see trade-offs in reviews.
-
-### Approaches to avoid
-
-| Approach | Why risky or out of scope |
-|----------|---------------------------|
-| Naive read → modify → flush without lock or conditional `WHERE` | Oversell risk |
-| ORM optimistic `@Version` + retry storms on hot rows | Poor p99 under contention |
-| `PESSIMISTIC_READ` (`FOR SHARE`) when you immediately write | Irrelevant |
-
-### Local ACID vs distributed consistency
-
-- Hold + `seat_holds` + outbox row = **one transaction** in inventory DB (ACID).
-- Between services: **eventual consistency** until saga completes — acceptable if states are explicit.
-
-## 7. Shared contracts package
-
-Path: `contracts/`
-
-- Contains command/event DTOs, with no business logic.
-- No Symfony, no Doctrine, no handlers.
-- Services depend on it via Composer path repository.
-
-Sharing PHP classes simplifies message exchange in this monorepo, but couples producers and consumers to class names and constructor shapes. A schema-only contract would support other languages and require a separate serialization and compatibility policy.
-
-Serialization: Symfony Messenger default serializer uses **FQCN** in message headers — acceptable for this PHP-only monorepo.
-
-### Shared Messenger infrastructure
-
-Path: `packages/messenger-idempotency/`
-
-- Contains the reusable Symfony Messenger middleware and DBAL inbox claim store.
-- Does not own database schema: each inbox-enabled service keeps its own `inbox_messages` migration and table.
-- Consumer identity and bus placement remain local service configuration.
-- Must not be merged into `contracts/`, which remains framework-independent.
-
-## 8. Symfony layering (per service)
-
-Services use a flat Symfony layout. Entities own persistence state; controllers, request/response DTOs and mappers define the HTTP boundary. [ADR 0006](adr/0006-clean-entity-api-separation.md) records the decision.
-
-### 8.1 Folder layout
-
-```
-services/{name}-service/src/
-  Controller/       # HTTP entry only
-  Dto/              # API request/response contracts (readonly classes)
-  Mapper/           # Entity ↔ Response DTO (no HTTP)
-  Entity/           # Doctrine persistence model only
-  Repository/       # DB access; inventory: seat lock/hold queries here
-  Service/          # Application use-cases (no HTTP types)
-  Exception/        # Domain exceptions (not HttpException)
-  MessageHandler/   # Async consumers
-  Outbox/           # Transactional outbox
-  Saga/             # orchestrator only
-config/packages/
-  framework.yaml    # Map domain exceptions → HTTP status codes
-```
-
-### 8.2 Layer boundaries
-
-| Layer | Responsibility | Must not |
-|-------|----------------|----------|
-| **Controller** | Route, read headers (`Idempotency-Key`), `MapRequestPayload`, return `JsonResponse` | Business rules, `EntityManager`, duplicate idempotency logic |
-| **Dto (request)** | Incoming JSON shape + Symfony Validator attributes | Doctrine, database |
-| **Dto (response)** | Outgoing JSON shape (public readonly properties) | Logic, ORM |
-| **Mapper** | `toResponse(Entity): *Response` (and later `fromRequest` if needed) | HTTP, transactions, idempotency rules |
-| **Entity** | Table mapping, constructors, getters, status constants | `toResponse()`, `matchesRequest()`, JSON, HTTP, Messenger |
-| **Repository** | Queries, persistence helpers | API mapping, HTTP |
-| **Service** | Orchestrate use-case, `wrapInTransaction`, idempotency, call Mapper | `JsonResponse`, `*HttpException`, return raw arrays for API |
-| **Exception** | `DomainException` subclasses for business violations | Extend Symfony `HttpException` |
-| **framework.yaml** | `framework.exceptions.<Class>.status_code` | — |
-
-### 8.3 Request/response flow (booking reference)
-
-```text
-POST /api/reservations
-  Controller
-    → MapRequestPayload → Dto/CreateReservationRequest
-    → ReservationService::create($request, $idempotencyKey)
-         → Repository (find by idempotency key)
-         → Entity persist OR resolveDuplicate
-         → Mapper::toResponse($entity)
-    → return $this->json(ReservationResponse, 202)
-
-IdempotencyPayloadMismatchException
-  → framework.yaml maps to HTTP 409 (not thrown in Controller)
-```
-
-### 8.4 booking-service (implemented patterns)
-
-- **Input:** `Dto/CreateReservationRequest` — `showId`, `seatIds[]`, `buyerName`, `buyerEmail`.
-- **Output:** `Dto/ReservationResponse` — API field names (`reservationId` maps from Entity `id`).
-- **Mapper:** `Mapper/ReservationMapper::toResponse()`.
-- **Idempotency:** `ReservationService::payloadMatches()` + unique `idempotency_key`; duplicate same payload → same response; different payload → `IdempotencyPayloadMismatchException` (409).
-- **Entity:** `Entity/Reservation` — getters only, no API methods.
-
-HTTP endpoints across services follow this structure.
-
-### 8.5 Entity mapping
-
-Entities carry Doctrine mapping attributes, associations and persistence lifecycle hooks. HTTP serialization and request validation belong to DTOs.
-
-### 8.6 Excluded dependencies
-
-- `Entity::toResponse()` or `Entity::toArray()` for API
-- `Entity::matchesRequest()` or comparison with Request DTO
-- `throw new ConflictHttpException()` inside Service
-- Returning `array<string, mixed>` from Service for JSON responses
-- Serializer `#[Groups]` on Entity (use Groups on Response DTO if needed later)
-- API Platform entities as public REST resources (out of scope)
-
-### 8.7 Message handlers
-
-Async operations follow `MessageHandler` → `Service` → `Repository` → `Outbox`. Commands and events use `contracts/` DTOs. Payment is worker-only; inventory also exposes catalog read endpoints.
-
-## 9. Infrastructure
-
-- **PostgreSQL:** one instance in Compose, four logical databases (`booking`, `inventory`, `payment`, `orchestrator`) — `ops/postgres/init/01-databases.sql`.
-- **RabbitMQ:** single broker in Compose; queues created via Messenger `auto_setup` (`orchestrator.queue`, `inventory.queue`, `payment.queue`, `booking.queue`). Formal `ops/rabbitmq/` definitions and DLQ — not yet.
-- **Docker Compose:** root `docker-compose.yml` — HTTP (booking, orchestrator), workers, outbox relay loops. Shared image: `docker/php/Dockerfile` + `SERVICE_PATH` build arg.
-- **Migrations:** PostgreSQL dialect only (`JSON`, `TEXT`, `TIMESTAMP`). One-shot per-service `*-migrate` containers complete before the corresponding runtime containers start, avoiding concurrent migration races.
-
-Each service has its **own** `composer.json` and image build. Dev setup: `docs/dev-setup.md`.
-
-## 10. Reproducible scenarios
-
-| Scenario | Expected behavior |
-|----------|-------------------|
-| Payment fails after hold | Seats released, reservation cancelled |
-| Client disappears | Planned: expiry releases seats if payment is still pending |
-| Two users, one seat | Exactly one hold succeeds |
-| Duplicate reserve click | One reservation (idempotency) |
-| Outbox republish | No second hold |
-| Process crash mid-saga | Current state is queryable; crash-recovery scenarios are not yet tested |
-
-## 11. Implementation phases
-
-| Phase | Deliverable | Status |
-|-------|-------------|--------|
-| 1 | Inventory hold/release + `Show` catalog | **done**; single-seat PostgreSQL contention test passes (commit + rollback) |
-| 1b | Booking POST + idempotency + outbox | **done** |
-| 2 | Orchestrator: saga coordinator + happy-path handlers | **done** |
-| 3 | End-to-end happy path over RabbitMQ (Docker) | **done** — automated happy-path + duplicate-redelivery runner passes |
-| 4 | Payment failure → compensation | **done — automated payment-failure + duplicate-redelivery E2E passes** |
-| 5 | Consumer idempotency (`inbox_messages`) | **done** — inbox on inventory, payment and orchestrator; booking uses idempotent status updates |
-| 6 | Expiry | pending |
-| 7 | `GET /saga` + DLQ + load tests | partial (state API and HTTP acceptance load test implemented; transition history, DLQ and saga throughput tests pending) |
-
-## 12. Explicit non-goals (MVP)
-
-- Full UI / SSE / aggressive polling
-- Event sourcing
-- Multi-region deployment
-- Real payment provider integration
-- DDD / Deptrac layer enforcement
-- Schema-only cross-service contracts (documented as alternative only)
-
-## 13. Documentation map
-
-| Path | Content |
-|------|---------|
-| `docs/architecture.md` | This file |
-| `docs/current-state.md` | Implementation snapshot (done / pending) |
-| `docs/dev-setup.md` | Docker Compose quick start |
-| `docs/adr/` | Architecture decision records (incl. `0006-clean-entity-api-separation.md`, `0007-shared-messenger-idempotency-package.md`) |
-| `docs/diagrams/reservation-container.mmd` | C4-style container and RabbitMQ routing view for the reservation saga |
-| `docs/diagrams/` | Container and sequence diagrams |
-| `tests/load/README.md` | HTTP load-test commands and measurement scope |
-
-## 14. Glossary
-
-| Term | Meaning |
-|------|---------|
-| Show | Ticketing show (concert); inventory catalog entity; `showId` in API/contracts |
-| Hold | Temporary reservation of seat(s), `HELD`, with `expiresAt` |
-| Compensation | Semantic undo (release, void), not DB rollback |
-| Saga | Long-running process across services with explicit states |
-| Outbox | DB table written in same TX as business data, then relayed to broker |
-| Conditional UPDATE | Single-statement hold: `UPDATE ... WHERE state = 'AVAILABLE'` |
+Keep API serialization groups on response DTOs if needed, not entities. API Platform, event sourcing, a full client application and multi-region deployment are outside this project's scope.

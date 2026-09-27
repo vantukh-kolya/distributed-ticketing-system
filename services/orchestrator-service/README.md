@@ -1,46 +1,15 @@
-# orchestrator-service
+# Orchestrator service
 
-Coordinates the reservation saga over RabbitMQ. Inventory owns seat state; payment owns payment processing. The orchestrator persists workflow state and records the next command or terminal event in its outbox.
+Owns reservation workflow state and records the next command or terminal event. See [system architecture](../../docs/architecture.md#4-distributed-workflow-and-failure-recovery) for coordination decisions and recovery boundaries.
 
-## Workflow
+| Code | Responsibility |
+|------|----------------|
+| [SagaCoordinator](src/Saga/SagaCoordinator.php) | Handle outcomes and record outbound work |
+| [workflow.yaml](config/packages/workflow.yaml) | Allowed transitions |
+| [SagaRepository](src/Repository/SagaRepository.php) | Lock and refresh an existing saga before transition checks |
+| [Saga](src/Entity/Saga.php) / [SagaState](src/Enum/SagaState.php) | Persisted workflow state |
+| [Message handlers](src/MessageHandler/) | Inbound event adapters |
+| [SagaController](src/Controller/SagaController.php) | `GET /api/saga/{reservationId}` |
+| [Outbox relay](src/Command/OutboxRelayCommand.php) | Publish commands and terminal events on their respective buses |
 
-```text
-AWAITING_SEATS → AWAITING_PAYMENT → PAYMENT_PAID → CONFIRMED
-       │                │
-       │                └→ COMPENSATING → CANCELLED
-       └→ CANCELLED
-```
-
-The transition graph is defined in `config/packages/workflow.yaml`. Each transition locks and refreshes the saga row before checking its state, then commits the state change and outbox record together. Inbox deduplication handles repeated delivery of the same message.
-
-`GET /api/saga/{reservationId}` returns the current state. Hold expiry, late-payment reconciliation, and transition history remain open work.
-
-## Layout
-
-| Path | Purpose |
-|------|---------|
-| `src/Entity/Saga.php` | Persistence snapshot (one row per `reservationId`) |
-| `src/Enum/SagaState.php` | Persisted states |
-| `config/packages/workflow.yaml` | Allowed state transitions |
-| `src/Saga/SagaCoordinator.php` | Transitions + outbound commands via outbox |
-| `src/MessageHandler/*` | Thin adapters → coordinator |
-| `src/Controller/SagaController.php` | Current-state query API |
-| `src/Outbox/` + `app:outbox:relay` | Commands on `command.bus`, terminal reservation events on `event.bus` |
-
-## Verification
-
-From the repository root, with the Compose stack running:
-
-```bash
-./tests/integration/saga-concurrency.sh
-./tests/e2e/happy-path-idempotency.sh
-./tests/e2e/payment-failure.sh
-```
-
-The PostgreSQL runner checks the transition matrix and competing handlers with different message IDs, including rollback and stale ORM state. The E2E runners check terminal outcomes and duplicate delivery over RabbitMQ. Run E2E scripts sequentially; the failure script leaves the stack configured to decline payments.
-
-## References
-
-- [Architecture](../../docs/architecture.md)
-- [Development setup and test details](../../docs/dev-setup.md)
-- [Current state](../../docs/current-state.md)
+[Verification commands and coverage](../../docs/dev-setup.md#verification) · [Project scope](../../README.md#scope-and-limitations)
