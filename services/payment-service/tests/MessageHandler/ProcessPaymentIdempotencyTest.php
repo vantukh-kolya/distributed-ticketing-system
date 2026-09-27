@@ -132,8 +132,6 @@ final class ProcessPaymentIdempotencyTest extends KernelTestCase
             self::assertInstanceOf(\RuntimeException::class, $exception->getPrevious());
         }
 
-        // Messenger resets Doctrine services between deliveries. Reproduce that
-        // boundary before dispatching the redelivery in the same test process.
         $this->entityManager->clear();
 
         self::assertFalse($this->inboxMessageExists($messageId));

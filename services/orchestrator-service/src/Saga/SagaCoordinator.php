@@ -27,11 +27,6 @@ use Ticketing\Contracts\Event\SeatsConfirmed;
 use Ticketing\Contracts\Event\SeatsHeld;
 use Ticketing\Contracts\Event\SeatsReleased;
 
-/**
- * Application layer for saga transitions and outbound commands.
- *
- * Keep thin: no seat/payment business rules — only state + dispatch commands.
- */
 final readonly class SagaCoordinator
 {
     public function __construct(

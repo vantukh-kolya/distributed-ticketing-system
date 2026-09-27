@@ -20,9 +20,6 @@ use Ticketing\Contracts\Event\SeatsConfirmed;
 use Ticketing\Contracts\Event\SeatsHeld;
 use Ticketing\Contracts\Event\SeatsReleased;
 
-/**
- * HoldSeats / ReleaseSeats use-cases: idempotency, SeatHold aggregate, outbox.
- */
 final readonly class SeatHoldService
 {
     public function __construct(

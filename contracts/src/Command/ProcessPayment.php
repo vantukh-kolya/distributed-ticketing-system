@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace Ticketing\Contracts\Command;
 
-/**
- * Saga command: attempt a payment for a reservation.
- */
 final readonly class ProcessPayment
 {
     public function __construct(
