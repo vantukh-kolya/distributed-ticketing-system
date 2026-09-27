@@ -1,0 +1,38 @@
+framework:
+    workflows:
+        reservation_saga:
+            type: state_machine
+            supports:
+                - App\Entity\Saga
+            marking_store:
+                type: method
+                property: state
+            initial_marking: AWAITING_SEATS
+            places:
+                - AWAITING_SEATS
+                # Legacy enum value; no active flow enters this state.
+                - SEATS_HELD
+                - AWAITING_PAYMENT
+                - PAYMENT_PAID
+                - COMPENSATING
+                - CANCELLED
+                - CONFIRMED
+            transitions:
+                seats_held:
+                    from: AWAITING_SEATS
+                    to: AWAITING_PAYMENT
+                seat_hold_rejected:
+                    from: AWAITING_SEATS
+                    to: CANCELLED
+                payment_succeeded:
+                    from: AWAITING_PAYMENT
+                    to: PAYMENT_PAID
+                payment_failed:
+                    from: AWAITING_PAYMENT
+                    to: COMPENSATING
+                seats_released:
+                    from: COMPENSATING
+                    to: CANCELLED
+                seats_confirmed:
+                    from: PAYMENT_PAID
+                    to: CONFIRMED

@@ -1,0 +1,35 @@
+framework:
+    messenger:
+        default_bus: command.bus
+        buses:
+            command.bus:
+                middleware:
+                    - doctrine_transaction
+                    - Ticketing\MessengerIdempotency\IdempotencyMiddleware
+            event.bus: ~
+
+        transports:
+            outbound:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues: false
+
+            inbound:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues:
+                        payment.queue:
+                            binding_keys:
+                                - payment.process
+
+        routing:
+            Ticketing\Contracts\Event\PaymentSucceeded: outbound
+            Ticketing\Contracts\Event\PaymentFailed: outbound

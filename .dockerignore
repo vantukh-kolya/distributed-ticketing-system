@@ -1,0 +1,7 @@
+**/.git
+**/var/
+**/vendor/
+**/.env.local
+**/.env.*.local
+**/phpunit.dist.xml
+**/tests/

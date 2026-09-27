@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../../orchestrator-service/vendor/symfony/dependency-injection/Loader/schema/services.schema.json
+framework:
+    messenger:
+        default_bus: command.bus
+        buses:
+            command.bus:
+                middleware:
+                    - doctrine_transaction
+                    - Ticketing\MessengerIdempotency\IdempotencyMiddleware
+            event.bus: ~
+
+        transports:
+            outbound:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues: false
+
+            inbound:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues:
+                        inventory.queue:
+                            binding_keys:
+                                - seats.hold
+                                - seats.release
+                                - seats.confirm
+
+        routing:
+            Ticketing\Contracts\Event\SeatsHeld: outbound
+            Ticketing\Contracts\Event\SeatHoldRejected: outbound
+            Ticketing\Contracts\Event\SeatsReleased: outbound
+            Ticketing\Contracts\Event\SeatsConfirmed: outbound

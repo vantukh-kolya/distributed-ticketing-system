@@ -1,0 +1,17 @@
+{
+    "name": "ticketing/messenger-idempotency",
+    "description": "Reusable inbox middleware for idempotent Symfony Messenger consumers",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.4",
+        "doctrine/dbal": "^4.0",
+        "symfony/messenger": "8.1.*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ticketing\\MessengerIdempotency\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

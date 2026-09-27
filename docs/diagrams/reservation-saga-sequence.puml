@@ -1,0 +1,96 @@
+@startuml reservation-saga-sequence
+title Reservation saga — confirmation, hold rejection and payment compensation
+hide footbox
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 280
+skinparam wrapWidth 420
+autonumber
+
+participant "booking-service" as Booking
+participant "orchestrator-service\nSagaCoordinator" as Saga
+participant "inventory-service\nSeatHoldService" as Inventory
+participant "payment-service\nPaymentService" as Payment
+
+legend left
+  ->> = asynchronous command/event through RabbitMQ (Docker Compose).
+  Each arrow abbreviates: committed outbox → relay → ticketing exchange → destination queue.
+  TX = one local database transaction: inbox claim + business changes + outbound outbox.
+  Booking uses a local transaction and status guards, without an inbox.
+endlegend
+
+note over Booking,Payment
+  Entry: Booking has committed Reservation(PENDING) + outbox ReservationRequested.
+  Creation details: reservation-flow-sequence.puml.
+  All messages carry reservationId and correlationId. Databases are separate.
+end note
+Booking ->> Saga: ReservationRequested\nreservation.requested → orchestrator.queue
+Saga -> Saga: ReservationRequestedHandler → onReservationRequested()\nTX: create Saga(AWAITING_SEATS) + outbox HoldSeats; COMMIT
+Saga ->> Inventory: HoldSeats\nseats.hold → inventory.queue
+Inventory -> Inventory: HoldSeatsHandler → hold()\nTX: validate show and seat IDs; SeatLockingService::attemptHold()
+note right of Inventory
+  Sorted seat IDs; PESSIMISTIC_WRITE on seat rows.
+  Check all requested seats before changing any.
+end note
+
+alt Hold rejected: missing show/seats or seats unavailable
+    Inventory -> Inventory: TX: outbox SeatHoldRejected(reason); COMMIT\nNo seats held for this request
+    Inventory ->> Saga: SeatHoldRejected\nseats.hold_rejected → orchestrator.queue
+    Saga -> Saga: SeatHoldRejectedHandler → onSeatHoldRejected()\nTX: recordFailure(reason), AWAITING_SEATS → CANCELLED\n+ outbox ReservationCancelled; COMMIT
+    Saga ->> Booking: ReservationCancelled\nreservation.cancelled → booking.queue
+    Booking -> Booking: ReservationCancelledHandler\n→ ReservationCancellationService::onReservationCancelled()\nTX: PENDING → CANCELLED; COMMIT
+else Hold succeeds
+    Inventory -> Inventory: TX: seats AVAILABLE → HELD; persist SeatHold(expiresAt)\n+ outbox SeatsHeld; COMMIT
+    Inventory ->> Saga: SeatsHeld\nseats.held → orchestrator.queue
+    Saga -> Saga: SeatsHeldHandler → onSeatsHeld()\nTX: AWAITING_SEATS → AWAITING_PAYMENT\n+ outbox ProcessPayment; COMMIT
+    note left of Saga
+      Amount, currency and paymentMethodToken currently
+      come from SagaCoordinator configuration defaults.
+    end note
+    Saga ->> Payment: ProcessPayment\npayment.process → payment.queue
+    Payment -> Payment: ProcessPaymentHandler → process()\nTX: create/reuse Payment; FakePaymentGateway::process()\nGateway request idempotencyKey = reservationId
+    note right of Payment
+      Current gateway is local FakePaymentGateway.
+      tok_decline produces PAYMENT_DECLINED;
+      other tokens succeed. No real provider call.
+    end note
+
+    alt Payment succeeds
+        Payment -> Payment: TX: Payment → PAID + outbox PaymentSucceeded; COMMIT
+        Payment ->> Saga: PaymentSucceeded\npayment.succeeded → orchestrator.queue
+        Saga -> Saga: PaymentSucceededHandler → onPaymentSucceeded()\nTX: AWAITING_PAYMENT → PAYMENT_PAID\n+ outbox ConfirmSeats; COMMIT
+        Saga ->> Inventory: ConfirmSeats\nseats.confirm → inventory.queue
+        Inventory -> Inventory: ConfirmSeatsHandler → confirm()\nTX: check active hold; lock seats held by this reservation\nSeats HELD → SOLD, SeatHold → CONFIRMED\n+ outbox SeatsConfirmed; COMMIT
+        Inventory ->> Saga: SeatsConfirmed\nseats.confirmed → orchestrator.queue
+        Saga -> Saga: SeatsConfirmedHandler → onSeatsConfirmed()\nTX: PAYMENT_PAID → CONFIRMED\n+ outbox ReservationConfirmed; COMMIT
+        Saga ->> Booking: ReservationConfirmed\nreservation.confirmed → booking.queue
+        Booking -> Booking: ReservationConfirmedHandler\n→ ReservationConfirmationService::onReservationConfirmed()\nTX: Reservation → CONFIRMED; COMMIT
+    else Payment fails
+        Payment -> Payment: TX: Payment → FAILED + outbox PaymentFailed(reason); COMMIT
+        Payment ->> Saga: PaymentFailed\npayment.failed → orchestrator.queue
+        Saga -> Saga: PaymentFailedHandler → onPaymentFailed()\nTX: recordFailure(reason), AWAITING_PAYMENT → COMPENSATING\n+ outbox ReleaseSeats; COMMIT
+        Saga ->> Inventory: ReleaseSeats\nseats.release → inventory.queue
+        Inventory -> Inventory: ReleaseSeatsHandler → release()\nTX: check active hold; lock seats held by this reservation\nSeats HELD → AVAILABLE, SeatHold → RELEASED\n+ outbox SeatsReleased; COMMIT
+        Inventory ->> Saga: SeatsReleased\nseats.released → orchestrator.queue
+        Saga -> Saga: SeatsReleasedHandler → onSeatsReleased()\nTX: COMPENSATING → CANCELLED\n+ outbox ReservationCancelled; COMMIT
+        Saga ->> Booking: ReservationCancelled\nreservation.cancelled → booking.queue
+        Booking -> Booking: ReservationCancelledHandler\n→ ReservationCancellationService::onReservationCancelled()\nTX: PENDING → CANCELLED; COMMIT
+        note over Saga,Inventory
+          Compensation is a new committed operation that releases seats.
+          It does not roll back earlier transactions across services.
+        end note
+    end
+end
+
+note over Booking,Payment
+  Delivery is at least once. Inventory, Payment and Orchestrator deduplicate message_id via inbox.
+  Existing saga transitions lock the saga row, then check Workflow::can() before apply().
+  Missing saga / disallowed transitions are no-ops. Booking ignores repeated terminal updates.
+end note
+note over Saga,Inventory
+  Confirm/release paths above assume an active hold and seats owned by the reservation.
+  If those checks fail, current code returns without a completion event;
+  the saga may remain PAYMENT_PAID / COMPENSATING. No recovery path is invented here.
+  expiresAt is stored, but expiry scheduling and compensation are not implemented.
+end note
+@enduml

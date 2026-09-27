@@ -1,0 +1,48 @@
+# IDE
+/.idea/
+.vscode/
+*.code-workspace
+
+# Local AI instructions and tool state
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.agents/
+.codex/
+.claude/
+.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+
+# Personal notes and scratch files
+/docs/local/
+/scratch/
+
+# Symfony (all services)
+**/vendor/
+**/var/
+**/.env.local
+**/.env.local.php
+**/.env.*.local
+**/config/secrets/
+
+# Local test configuration and generated results
+**/phpunit.xml
+**/.phpunit.cache/
+**/.phpunit.result.cache
+**/coverage/
+
+# OS
+.DS_Store
+
+# Docker local overrides (when added)
+docker-compose.override.yml
+/docker-compose.override.yaml
+/compose.override.yml
+/compose.override.yaml

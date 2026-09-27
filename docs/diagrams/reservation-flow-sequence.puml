@@ -1,0 +1,108 @@
+@startuml reservation-flow-sequence
+!pragma teoz true
+title Reservation creation — HTTP, idempotency, transaction and outbox
+hide footbox
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 240
+skinparam wrapWidth 350
+autonumber
+
+actor Client
+participant "Symfony HTTP /\nReservationController" as HTTP
+participant ReservationService as Service
+participant ReservationRepository as Repo
+participant "Doctrine\nEntityManager" as EM
+participant OutboxRecorder as Outbox
+database "PostgreSQL\nbooking" as DB
+participant OutboxRelayCommand as Relay
+participant "Messenger event.bus\nAMQP outbound transport" as Bus
+queue "RabbitMQ\nticketing exchange" as MQ
+
+    note over HTTP,Outbox: Booking uses an application service, not a CreateReservation command/handler.\nReservation is the persisted model, no separate domain service is called.
+    Client -> HTTP: POST /api/reservations\nJSON + Idempotency-Key
+    HTTP -> HTTP: MapRequestPayload → CreateReservationRequest\ndeserialize + validate
+    break Invalid payload or missing/empty Idempotency-Key
+        HTTP --> Client: HTTP error (validation: 422, missing key: 400)
+    end
+    HTTP -> Service: create(payload, idempotencyKey)
+    Service -> Repo: findByIdempotencyKey(key)
+    Repo -> DB: SELECT reservations by idempotency_key
+    DB --> Repo: Reservation or null
+    Repo --> Service: Existing reservation or null
+    break Existing reservation
+        Service -> Service: resolveDuplicate() → payloadMatches()
+        note right of Service: Compare showId, normalized seatIds,\nbuyerName and buyerEmail.
+        alt Same payload
+            Service -> Service: ReservationMapper::toResponse(existing)
+            Service --> HTTP: ReservationResponse (current stored status)
+            HTTP --> Client: 202 Accepted (same reservationId)
+        else Different payload
+            Service --> HTTP: IdempotencyPayloadMismatchException
+            HTTP --> Client: 409 Conflict (framework.yaml mapping)
+        end
+    end
+
+group Local creation transaction
+        note over Service,DB: Local atomic transaction — EntityManager::wrapInTransaction()
+        Service -> EM: wrapInTransaction(callback)
+        EM -> DB: BEGIN
+        Service -> Repo: findByIdempotencyKey(key) — race recheck
+        Repo -> DB: SELECT reservations by idempotency_key
+        DB --> Repo: Reservation or null
+        Repo --> Service: Race-check result
+        note over Service,EM: If found: resolveDuplicate() as above, no new writes.\nMatching result commits, payload mismatch rolls back → 409.
+        opt Still no reservation for this key
+            Service -> Service: new Reservation(UUIDv7 id, UUIDv7 correlationId, ...)
+            note right of Service: Initial status PENDING,\nconstructor deduplicates seatIds.\nNo availability check or payment here.
+            Service -> EM: persist(reservation)
+            Service -> Outbox: record(new ReservationRequested(...),\nreservationId, correlationId)
+            Outbox -> Outbox: Serialize event, resolve reservation.requested\nnew OutboxMessage(UUIDv7, payload, metadata)
+            Outbox -> EM: persist(outboxMessage)
+            Service -> Service: ReservationMapper::toResponse(reservation)
+        end
+        note over Service,EM: Callback produces DTO before flush, create() returns only after commit.
+        EM -> DB: flush() — INSERT reservations + outbox_messages (if new)
+        alt Successful transaction
+            EM -> DB: COMMIT
+            EM --> Service: ReservationResponse
+        else Transaction failure
+            EM -> EM: close()
+            EM -> DB: ROLLBACK
+            note over EM,DB: Neither new row is committed.
+            EM --> Service: Exception
+        end
+    end
+    break Transaction failed
+        alt UniqueConstraintViolationException (concurrent insert)
+            Service -> EM: clear()
+            Service -> Repo: findByIdempotencyKey(key)
+            Repo -> DB: Reload winning reservation
+            DB --> Repo: Reservation or null
+            Repo --> Service: Reload result
+            note over Service,HTTP: Existing → resolveDuplicate(): matching payload → 202, mismatch → 409.\nMissing → RuntimeException. This is the implemented catch path,\nit does not reset the EntityManager closed by Doctrine.
+        else Other exception
+            Service --> HTTP: Propagate exception
+            HTTP --> Client: Error response (no successful creation)
+        end
+    end
+    Service --> HTTP: ReservationResponse
+    HTTP --> Client: 202 Accepted (PENDING for a new reservation)
+
+
+== Separate outbox relay process ==
+    note over DB,MQ: Separate relay process, only committed rows are visible.\nMay run before or after HTTP response delivery, HTTP does not wait for the saga.
+    Relay -> DB: OutboxMessageRepository::findUnpublished(limit)\npublished_at IS NULL, oldest first
+    DB --> Relay: OutboxMessage[]
+    loop Each unpublished row
+        Relay -> Relay: Deserialize payload to ReservationRequested
+        Relay -> Bus: dispatch(event, AmqpStamp)\nrouting key + message_id=outbox.id + correlation_id
+        Bus -> MQ: Publish reservation.requested → orchestrator.queue
+        Bus --> Relay: dispatch() returns
+        Relay -> Relay: OutboxMessage::markPublished() (in memory)
+    end
+    Relay -> EM: flush() after the entire batch
+    EM -> DB: UPDATE outbox_messages.published_at
+    note over Relay,MQ: Publish and marking are not atomic: failure before final flush can republish.\nSame outbox row retains message_id (at-least-once delivery).
+    note right of MQ: Async continuation in orchestrator-service:\nReservationRequestedHandler::__invoke()\n→ SagaCoordinator::onReservationRequested().\nSeat holding and payment belong to the subsequent saga.
+@enduml

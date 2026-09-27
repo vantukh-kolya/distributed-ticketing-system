@@ -1,0 +1,316 @@
+name: ticketing
+
+x-php-env: &php-env
+  APP_ENV: dev
+  APP_DEBUG: "1"
+  RUN_MIGRATIONS: "0"
+  MESSENGER_TRANSPORT_DSN: amqp://guest:guest@rabbitmq:5672/%2f
+  PAYMENT_METHOD_TOKEN: "${PAYMENT_METHOD_TOKEN:-tok_fake_visa}"
+
+x-php-depends: &php-depends
+  postgres:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+x-php-build: &php-build
+  context: .
+  dockerfile: docker/php/Dockerfile
+
+x-migrate: &migrate
+  depends_on:
+    postgres:
+      condition: service_healthy
+  command: ["true"]
+  restart: "no"
+  networks:
+    - ticketing
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./ops/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ticketing
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5673}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ticketing
+
+  booking-migrate:
+    <<: *migrate
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/booking-service
+    environment:
+      <<: *php-env
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/booking?serverVersion=16&charset=utf8
+
+  booking:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/booking-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/booking?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      booking-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8000"
+    command: ["php", "-S", "0.0.0.0:8000", "-t", "public"]
+    networks:
+      - ticketing
+
+  booking-worker:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/booking-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/booking?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      booking-migrate:
+        condition: service_completed_successfully
+    command: ["php", "bin/console", "messenger:consume", "inbound", "-vv"]
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  booking-outbox-relay:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/booking-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/booking?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      booking-migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -c "while true; do php bin/console app:outbox:relay || true; sleep 1; done"
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  orchestrator-migrate:
+    <<: *migrate
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/orchestrator-service
+    environment:
+      <<: *php-env
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/orchestrator?serverVersion=16&charset=utf8
+
+  orchestrator:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/orchestrator-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/orchestrator?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      orchestrator-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8000"
+    command: ["php", "-S", "0.0.0.0:8000", "-t", "public"]
+    networks:
+      - ticketing
+
+  orchestrator-worker:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/orchestrator-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/orchestrator?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      orchestrator-migrate:
+        condition: service_completed_successfully
+    command: ["php", "bin/console", "messenger:consume", "inbound", "-vv"]
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  orchestrator-outbox-relay:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/orchestrator-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/orchestrator?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      orchestrator-migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -c "while true; do php bin/console app:outbox:relay || true; sleep 1; done"
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  inventory-migrate:
+    <<: *migrate
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/inventory-service
+    environment:
+      <<: *php-env
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/inventory?serverVersion=16&charset=utf8
+
+  inventory-worker:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/inventory-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/inventory?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      inventory-migrate:
+        condition: service_completed_successfully
+    command: ["php", "bin/console", "messenger:consume", "inbound", "-vv"]
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  inventory:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/inventory-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/inventory?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      inventory-migrate:
+        condition: service_completed_successfully
+    command: ["php", "-S", "0.0.0.0:8000", "-t", "public"]
+    networks:
+      - ticketing
+
+  inventory-outbox-relay:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/inventory-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/inventory?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      inventory-migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -c "while true; do php bin/console app:outbox:relay || true; sleep 1; done"
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  payment-migrate:
+    <<: *migrate
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/payment-service
+    environment:
+      <<: *php-env
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/payment?serverVersion=16&charset=utf8
+
+  payment-worker:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/payment-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/payment?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      payment-migrate:
+        condition: service_completed_successfully
+    command: ["php", "bin/console", "messenger:consume", "inbound", "-vv"]
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  payment-outbox-relay:
+    build:
+      <<: *php-build
+      args:
+        SERVICE_PATH: services/payment-service
+    environment:
+      <<: *php-env
+      DATABASE_URL: postgresql://ticketing:ticketing@postgres:5432/payment?serverVersion=16&charset=utf8
+    depends_on:
+      <<: *php-depends
+      payment-migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -c "while true; do php bin/console app:outbox:relay || true; sleep 1; done"
+    restart: unless-stopped
+    networks:
+      - ticketing
+
+  e2e-ui:
+    image: nginx:1.27-alpine
+    depends_on:
+      - booking
+      - inventory
+      - orchestrator
+    ports:
+      - "8082:80"
+    volumes:
+      - ./ops/e2e-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ops/e2e-ui/index.html:/usr/share/nginx/html/index.html:ro
+    networks:
+      - ticketing
+
+networks:
+  ticketing:
+    driver: bridge
+
+volumes:
+  postgres_data:

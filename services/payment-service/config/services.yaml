@@ -1,0 +1,22 @@
+parameters:
+    app.payment.gateway_name: 'fake'
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+
+    App\Gateway\PaymentGatewayInterface: '@App\Gateway\FakePaymentGateway'
+
+    Ticketing\MessengerIdempotency\InboxMessageStore: ~
+
+    Ticketing\MessengerIdempotency\IdempotencyMiddleware:
+        arguments:
+            $consumerName: 'process_payment'
+
+    App\Service\PaymentService:
+        arguments:
+            $gatewayName: '%app.payment.gateway_name%'

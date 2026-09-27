@@ -1,0 +1,63 @@
+framework:
+    messenger:
+        default_bus: command.bus
+        buses:
+            command.bus: ~
+            event.bus:
+                middleware:
+                    - doctrine_transaction
+                    - Ticketing\MessengerIdempotency\IdempotencyMiddleware
+
+        transports:
+            inbound:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues:
+                        orchestrator.queue:
+                            binding_keys:
+                                - reservation.requested
+                                - seats.held
+                                - seats.hold_rejected
+                                - seats.released
+                                - payment.succeeded
+                                - payment.failed
+                                - seats.confirmed
+
+            inventory_commands:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues: false
+
+            payment_commands:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues: false
+
+            booking_events:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+                    exchange:
+                        name: ticketing
+                        type: direct
+                    queues: false
+
+        routing:
+            Ticketing\Contracts\Command\HoldSeats: inventory_commands
+            Ticketing\Contracts\Command\ReleaseSeats: inventory_commands
+            Ticketing\Contracts\Command\ConfirmSeats: inventory_commands
+            Ticketing\Contracts\Command\ProcessPayment: payment_commands
+            Ticketing\Contracts\Event\ReservationConfirmed: booking_events
+            Ticketing\Contracts\Event\ReservationCancelled: booking_events

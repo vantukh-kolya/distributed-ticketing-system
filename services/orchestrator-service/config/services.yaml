@@ -1,0 +1,25 @@
+parameters:
+    app.payment.default_amount_minor: 5000
+    app.payment.default_currency: 'UAH'
+    app.payment.default_payment_method_token: '%env(string:PAYMENT_METHOD_TOKEN)%'
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+
+    App\Saga\SagaCoordinator:
+        arguments:
+            $sagaStateMachine: '@state_machine.reservation_saga'
+            $defaultAmountMinor: '%app.payment.default_amount_minor%'
+            $defaultCurrency: '%app.payment.default_currency%'
+            $defaultPaymentMethodToken: '%app.payment.default_payment_method_token%'
+
+    Ticketing\MessengerIdempotency\InboxMessageStore: ~
+
+    Ticketing\MessengerIdempotency\IdempotencyMiddleware:
+        arguments:
+            $consumerName: 'orchestrator_events'

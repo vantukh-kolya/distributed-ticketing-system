@@ -1,0 +1,15 @@
+{
+    "name": "ticketing/contracts",
+    "description": "Shared command and event DTOs for ticketing saga services",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ticketing\\Contracts\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

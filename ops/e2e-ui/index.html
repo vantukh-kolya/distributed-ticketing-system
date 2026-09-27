@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Reservation Console</title>
+  <style>
+    :root {
+      --page: #f3f5f8;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --border: #dce2ea;
+      --border-strong: #c7d0dc;
+      --text: #172033;
+      --muted: #667085;
+      --primary: #2457d6;
+      --primary-hover: #1d48b5;
+      --primary-soft: #edf3ff;
+      --success: #16865d;
+      --warning: #b56a0a;
+      --warning-soft: #fff7e6;
+      --danger: #c43d4f;
+      --shadow: 0 18px 50px rgba(31, 42, 68, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--page);
+      color: var(--text);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    .topbar { background: #111a2d; color: #fff; border-bottom: 1px solid #26334b; }
+    .topbar-inner {
+      width: min(1180px, calc(100% - 40px));
+      min-height: 68px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 720; letter-spacing: -.01em; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #5f8cff, #2f60dd);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.24);
+      font-size: 18px;
+    }
+    .connection { display: inline-flex; align-items: center; gap: 8px; color: #c9d2e3; font-size: 13px; }
+    .connection-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #91a0b7;
+      box-shadow: 0 0 0 4px rgba(145,160,183,.12);
+    }
+    .connection.online .connection-dot { background: #48d39b; box-shadow: 0 0 0 4px rgba(72,211,155,.14); }
+    .connection.error .connection-dot { background: #ff7c8d; box-shadow: 0 0 0 4px rgba(255,124,141,.14); }
+    main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 42px 0 72px; }
+    .page-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    .page-heading h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); line-height: 1.1; letter-spacing: -.035em; }
+    .page-heading p { margin: 8px 0 0; color: var(--muted); max-width: 610px; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.28fr) minmax(330px, .72fr);
+      gap: 22px;
+      align-items: start;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .card-header { padding: 22px 24px 18px; border-bottom: 1px solid var(--border); }
+    .card-header h2 { margin: 0; font-size: 18px; letter-spacing: -.015em; }
+    .card-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .card-body { padding: 24px; }
+    .section + .section { margin-top: 28px; padding-top: 26px; border-top: 1px solid var(--border); }
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .section-title h3 { margin: 0; font-size: 15px; }
+    .section-title span { color: var(--muted); font-size: 12px; }
+    label { display: block; margin-bottom: 7px; color: #414b5e; font-size: 13px; font-weight: 650; }
+    input, select {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(36,87,214,.12); }
+    select { cursor: pointer; }
+    .show-search { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    .button {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      font-weight: 700;
+      transition: background .15s, border-color .15s, transform .15s;
+    }
+    .button:hover:not(:disabled) { transform: translateY(-1px); }
+    .button-primary { color: #fff; background: var(--primary); }
+    .button-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .button-secondary { color: #344054; background: var(--surface); border-color: var(--border-strong); }
+    .button-secondary:hover:not(:disabled) { background: var(--surface-soft); }
+    .event-meta { min-height: 22px; margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .event-meta.error { color: var(--danger); }
+    .availability-notice {
+      margin-top: 12px;
+      padding: 11px 12px;
+      color: #7a4b08;
+      background: var(--warning-soft);
+      border: 1px solid #f0cf91;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+    .seat-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin: 18px 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      border: 1px solid var(--border-strong);
+      background: #fff;
+    }
+    .legend-swatch.selected { background: var(--primary); border-color: var(--primary); }
+    .legend-swatch.held { background: var(--warning-soft); border-color: #efbd6e; }
+    .legend-swatch.sold { background: #e8ebef; border-color: #cfd5dd; }
+    .seats {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+      gap: 10px;
+      min-height: 78px;
+    }
+    .empty-seats {
+      grid-column: 1 / -1;
+      display: grid;
+      place-items: center;
+      min-height: 110px;
+      padding: 20px;
+      color: var(--muted);
+      background: var(--surface-soft);
+      border: 1px dashed var(--border-strong);
+      border-radius: 12px;
+      text-align: center;
+    }
+    .seat {
+      min-height: 62px;
+      padding: 9px 8px;
+      color: #344054;
+      background: #fff;
+      border: 1px solid var(--border-strong);
+      border-radius: 11px;
+      font-weight: 750;
+      transition: transform .12s, border-color .12s, background .12s, color .12s;
+    }
+    .seat:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--primary); }
+    .seat small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .seat.selected {
+      color: #fff;
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 6px 14px rgba(36,87,214,.2);
+    }
+    .seat.selected small { color: #dce6ff; }
+    .seat.held { color: var(--warning); background: var(--warning-soft); border-color: #efc47f; }
+    .seat.sold { color: #8b95a5; background: #edf0f3; border-color: #d8dde4; }
+    .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-top: 24px;
+      padding: 16px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .summary-label { color: var(--muted); font-size: 12px; }
+    .summary-value { margin-top: 2px; font-weight: 750; }
+    .idempotency-hint { margin: 12px 0 0; padding: 12px 14px; color: #344054; background: var(--primary-soft); border-radius: 10px; font-size: 12px; }
+    .idempotency-hint strong { display: block; margin-bottom: 3px; color: var(--primary); }
+    .form-message { min-height: 22px; margin-top: 12px; color: var(--muted); font-size: 13px; text-align: center; }
+    .form-message.success { color: var(--success); }
+    .form-message.error { color: var(--danger); }
+    .status-panel { position: sticky; top: 22px; overflow: hidden; }
+    .status-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 24px; }
+    .status-tile {
+      min-width: 0;
+      padding: 13px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+    }
+    .status-tile span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .status-tile strong {
+      display: block;
+      margin-top: 5px;
+      overflow: hidden;
+      color: #344054;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-tile strong.good { color: var(--success); }
+    .status-tile strong.warn { color: var(--warning); }
+    .status-tile strong.bad { color: var(--danger); }
+    .status-empty { padding: 34px 18px; color: var(--muted); text-align: center; }
+    .status-empty-icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 13px;
+      color: var(--primary);
+      background: var(--primary-soft);
+      border-radius: 14px;
+      font-size: 22px;
+    }
+    .status-empty strong { display: block; margin-bottom: 5px; color: var(--text); }
+    .lookup {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      text-align: left;
+    }
+    .lookup label { text-align: left; }
+    .lookup-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .lookup-message { min-height: 18px; margin-top: 7px; color: var(--danger); font-size: 11px; }
+    .timeline { list-style: none; margin: 0; padding: 0; }
+    .timeline li {
+      position: relative;
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 11px;
+      min-height: 58px;
+      color: #98a2b3;
+    }
+    .timeline li:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 28px;
+      bottom: 0;
+      left: 13px;
+      width: 2px;
+      background: var(--border);
+    }
+    .step-dot {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      z-index: 1;
+      border: 2px solid var(--border-strong);
+      border-radius: 50%;
+      background: #fff;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .step-copy strong { display: block; color: inherit; font-size: 13px; }
+    .step-copy span { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
+    .timeline li.done { color: var(--success); }
+    .timeline li.done .step-dot { color: #fff; background: var(--success); border-color: var(--success); }
+    .timeline li.active { color: var(--primary); }
+    .timeline li.active .step-dot { border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); }
+    .timeline li.failed { color: var(--danger); }
+    .timeline li.failed .step-dot { color: #fff; background: var(--danger); border-color: var(--danger); }
+    .failure-reason {
+      margin: 4px 0 18px;
+      padding: 12px 13px;
+      color: #8b2435;
+      background: #fff2f4;
+      border: 1px solid #f1c7ce;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+    .failure-reason strong { display: block; margin-bottom: 2px; }
+    .technical-details { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .technical-details summary { color: #475467; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .technical-list { margin-top: 12px; display: grid; gap: 8px; color: var(--muted); font-size: 11px; }
+    .technical-row { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px; }
+    .technical-row > span { min-width: 0; overflow-wrap: anywhere; }
+    .technical-list code { color: #344054; }
+    .copy-button {
+      min-width: 74px;
+      padding: 4px 7px;
+      color: #475467;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .hidden { display: none !important; }
+    @media (max-width: 900px) {
+      .workspace { grid-template-columns: 1fr; }
+      .status-panel { position: static; }
+    }
+    @media (max-width: 600px) {
+      .topbar-inner, main { width: min(100% - 24px, 1180px); }
+      main { padding-top: 28px; }
+      .page-heading { align-items: flex-start; flex-direction: column; }
+      .fields, .status-overview { grid-template-columns: 1fr; }
+      .show-search { grid-template-columns: 1fr; }
+      .lookup-row { grid-template-columns: 1fr; }
+      .summary { align-items: stretch; flex-direction: column; }
+    }
+    .explainer { margin-top: 24px; scroll-margin-top: 24px; }
+    .explainer h3 { margin: 0 0 8px; font-size: 15px; }
+    .explainer p { margin: 6px 0 12px; color: var(--muted); font-size: 13px; }
+    .explain-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+    .request-code { margin: 10px 0 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: #111a2d; color: #dfe8fc; font: 12px/1.65 ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+    .idempotency-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+    .idempotency-result { margin-top: 12px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .idempotency-result.success { color: var(--success); }
+    .idempotency-result.error { color: var(--danger); }
+    .attempts { padding: 0; margin: 18px 0 0; list-style: none; }
+    .attempts li { padding: 10px 0; border-top: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+    .attempts strong { display: block; }
+    .attempts span { color: var(--muted); }
+    .timeline-note { color: var(--muted); font-size: 11px; margin: 0 0 18px; }
+    button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+    @media (max-width: 600px) { .explain-grid { grid-template-columns: 1fr; } .idempotency-actions .button { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span>Reservation Console</span>
+      </div>
+      <div class="connection" id="connectionStatus">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connectionText">Checking connection</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-heading">
+      <div>
+        <h1>Seat reservations</h1>
+        <p>Choose a show and seats, enter your contact details, and track your reservation.</p>
+      </div>
+      <button class="button button-secondary hidden" id="newReservation" type="button">New reservation</button>
+    </div>
+
+    <div class="workspace">
+      <form class="card" id="reservationForm">
+        <div class="card-header">
+          <h2>Reservation details</h2>
+          <p>Seat availability updates without reloading the page.</p>
+        </div>
+
+        <div class="card-body">
+          <section class="section">
+            <div class="section-title">
+              <h3>Show</h3>
+              <span>Step 1 of 3</span>
+            </div>
+            <label for="showId">Show</label>
+            <div class="show-search">
+              <select id="showId" name="showId" required>
+                <option value="">Loading shows…</option>
+              </select>
+              <button class="button button-secondary" id="loadSeats" type="button">Refresh</button>
+            </div>
+            <div class="event-meta" id="showMeta" role="status">Loading catalog.</div>
+            <div class="availability-notice hidden" id="availabilityNotice"></div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>Seats</h3>
+              <span id="seatCount">Step 2 of 3 · None selected</span>
+            </div>
+            <div class="seat-legend" aria-label="Seat status legend">
+              <span class="legend-item"><span class="legend-swatch"></span>Available</span>
+              <span class="legend-item"><span class="legend-swatch selected"></span>Selected</span>
+              <span class="legend-item"><span class="legend-swatch held"></span>Held</span>
+              <span class="legend-item"><span class="legend-swatch sold"></span>Sold</span>
+            </div>
+            <div class="seats" id="seats">
+              <div class="empty-seats">Load the seats for a show to get started.</div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>Contact details</h3>
+              <span>Step 3 of 3</span>
+            </div>
+            <div class="fields">
+              <div>
+                <label for="buyerName">Buyer name</label>
+                <input id="buyerName" name="buyerName" autocomplete="name" placeholder="Full name" required>
+              </div>
+              <div>
+                <label for="buyerEmail">Email</label>
+                <input id="buyerEmail" name="buyerEmail" type="email" autocomplete="email" placeholder="name@example.com" required>
+              </div>
+            </div>
+          </section>
+
+          <div class="summary">
+            <div>
+              <div class="summary-label">Selected seats</div>
+              <div class="summary-value" id="selectionSummary">No seats selected</div>
+            </div>
+            <button class="button button-primary" id="reserve" type="submit" aria-describedby="idempotencyHint" disabled>Confirm reservation</button>
+          </div>
+          <p class="idempotency-hint" id="idempotencyHint"><strong>Duplicate reservation protection</strong>The frontend generates an <code>Idempotency-Key</code> and sends it as a request header. Sending the same data with the same key returns the existing reservation.</p>
+          <div class="form-message" id="formMessage" aria-live="polite"></div>
+        </div>
+      </form>
+
+      <aside class="card status-panel">
+        <div class="card-header">
+          <h2>Reservation status</h2>
+          <p id="statusSubtitle">Your status will appear after you create a reservation.</p>
+        </div>
+        <div class="card-body">
+          <div class="status-empty" id="statusEmpty">
+            <div class="status-empty-icon" aria-hidden="true">✓</div>
+            <strong>Ready to start</strong>
+            Select at least one available seat and enter your contact details.
+            <form class="lookup" id="lookupForm">
+              <label for="reservationLookup">Open an existing reservation</label>
+              <div class="lookup-row">
+                <input id="reservationLookup" autocomplete="off" placeholder="Reservation ID" required>
+                <button class="button button-secondary" id="openReservation" type="submit">Open</button>
+              </div>
+              <div class="lookup-message" id="lookupMessage" aria-live="polite"></div>
+            </form>
+          </div>
+          <div class="hidden" id="statusContent">
+            <div class="status-overview">
+              <div class="status-tile"><span>Reservation</span><strong id="bookingState">PENDING</strong></div>
+              <div class="status-tile"><span>Saga</span><strong id="sagaState">STARTING</strong></div>
+              <div class="status-tile"><span>Seats</span><strong id="seatState">CHECKING</strong></div>
+              <div class="status-tile"><span>Updated</span><strong id="updatedAt">—</strong></div>
+            </div>
+            <div class="failure-reason hidden" id="failureReason">
+              <strong>Cancellation reason</strong>
+              <span id="failureReasonText"></span>
+            </div>
+            <ol class="timeline" id="timeline"></ol>
+            <p class="timeline-note">Flow inferred from the current saga state. This is not a persisted event history.</p>
+            <details class="technical-details" open>
+              <summary>Reservation identifiers</summary>
+              <div class="technical-list">
+                <div class="technical-row"><span>Reservation ID: <code id="reservationId">—</code></span><button class="copy-button" data-copy="reservationId" type="button">Copy</button></div>
+                <div class="technical-row"><span>Correlation ID: <code id="correlationId">—</code></span><button class="copy-button" data-copy="correlationId" type="button">Copy</button></div>
+                <div class="technical-row"><span>Idempotency key: <code id="idempotencyKey">—</code></span><button class="copy-button" data-copy="idempotencyKey" type="button">Copy</button></div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <section class="card explainer" id="httpInspector" aria-labelledby="httpTitle">
+      <div class="card-header">
+        <h2 id="httpTitle">Request and response</h2>
+      </div>
+      <div class="card-body">
+        <div class="explain-grid">
+          <div>
+            <h3>Latest POST request</h3>
+            <pre class="request-code" id="requestPreview">Your request will appear after you create a reservation.</pre>
+          </div>
+          <div>
+            <h3>Server response</h3>
+            <pre class="request-code" id="responsePreview">No response yet.</pre>
+          </div>
+        </div>
+        <div class="idempotency-actions">
+          <button class="button button-secondary" type="button" id="repeatRequest" disabled>Repeat the same request</button>
+          <button class="button button-secondary" type="button" id="conflictRequest" disabled>Same key + different name</button>
+        </div>
+        <div class="idempotency-result" id="idempotencyResult" role="status">These actions become available after you create a reservation.</div>
+        <ol class="attempts" id="requestAttempts" aria-label="POST attempts in this page session"></ol>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const byId = id => document.getElementById(id);
+    const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const app = {
+      seats: [],
+      selected: new Set(),
+      reservation: null,
+      request: null,
+      idempotencyKey: '',
+      shows: [],
+      failureReason: null,
+      busy: false,
+      attempts: [],
+      pollToken: 0,
+      seenSagaStates: new Set()
+    };
+
+    function escapeText(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function setConnection(mode, text) {
+      const element = byId('connectionStatus');
+      element.className = 'connection' + (mode ? ' ' + mode : '');
+      byId('connectionText').textContent = text;
+    }
+
+    function setMessage(text, type) {
+      const element = byId('formMessage');
+      element.textContent = text;
+      element.className = 'form-message' + (type ? ' ' + type : '');
+    }
+
+    function stateClass(value) {
+      if (['CONFIRMED', 'SOLD', 'PAID'].includes(value)) return 'good';
+      if (['CANCELLED', 'FAILED'].includes(value)) return 'bad';
+      if (['HELD', 'COMPENSATING', 'AWAITING_PAYMENT', 'AWAITING_SEATS'].includes(value)) return 'warn';
+      return '';
+    }
+
+    function setState(id, value) {
+      const element = byId(id);
+      element.textContent = value;
+      element.className = stateClass(value);
+    }
+
+    function renderHttpEvidence() {
+      const attempt = app.attempts[app.attempts.length - 1];
+      if (attempt) {
+        byId('requestPreview').textContent = 'POST /api/booking/reservations\nContent-Type: application/json\nIdempotency-Key: ' +
+          attempt.key + '\n\n' + JSON.stringify(attempt.payload, null, 2);
+        byId('responsePreview').textContent = attempt.response;
+      }
+      byId('requestAttempts').innerHTML = app.attempts.slice(-8).map(item =>
+        '<li><strong>' + escapeText(item.time + ' · ' + item.label + ' · ' + item.outcome) +
+        '</strong><span>Idempotency-Key: ' + escapeText(item.key) +
+        (item.reservationId ? '<br>reservationId: ' + escapeText(item.reservationId) : '') + '</span></li>'
+      ).join('');
+    }
+
+    async function jsonFetch(url, options, label) {
+      const attempt = label ? {
+        time: new Date().toLocaleTimeString('en-GB'), label,
+        key: options.headers['Idempotency-Key'], payload: JSON.parse(options.body),
+        outcome: 'Waiting for response', response: 'Request sent…'
+      } : null;
+      if (attempt) {
+        app.attempts.push(attempt);
+        renderHttpEvidence();
+      }
+      try {
+        const response = await fetch(url, options || {});
+        const body = await response.text();
+        let data;
+        try { data = JSON.parse(body); } catch { data = null; }
+        if (attempt) {
+          attempt.outcome = 'HTTP ' + response.status;
+          attempt.response = 'HTTP ' + response.status + '\n\n' + (data !== null ? JSON.stringify(data, null, 2) : body);
+          attempt.reservationId = data?.reservationId;
+        }
+        if (!response.ok) {
+          const error = new Error(response.status + ': ' + (data?.detail || data?.title || body.slice(0, 180)));
+          error.status = response.status;
+          throw error;
+        }
+        if (data === null) throw new Error('The server returned an invalid JSON response.');
+        return data;
+      } catch (error) {
+        if (attempt && attempt.outcome === 'Waiting for response') {
+          attempt.outcome = 'No response received';
+          attempt.response = 'Request outcome unknown: ' + error.message + '\nRetry the same data with the same key.';
+        }
+        throw error;
+      } finally {
+        if (attempt) renderHttpEvidence();
+      }
+    }
+
+    function updateActions() {
+      const nameValid = byId('buyerName').value.trim().length > 0;
+      const emailValid = byId('buyerEmail').validity.valid && byId('buyerEmail').value.trim().length > 0;
+      const canSubmit = app.selected.size > 0 && nameValid && emailValid && !app.reservation && !app.busy;
+      byId('reserve').disabled = !canSubmit;
+      const locked = Boolean(app.reservation) || app.busy;
+      byId('loadSeats').disabled = locked;
+      byId('showId').disabled = locked;
+      byId('buyerName').disabled = locked;
+      byId('buyerEmail').disabled = locked;
+      byId('newReservation').disabled = app.busy;
+      byId('openReservation').disabled = app.busy;
+      const canReplay = Boolean(app.reservation && app.request && app.idempotencyKey) && !app.busy;
+      byId('repeatRequest').disabled = !canReplay;
+      byId('conflictRequest').disabled = !canReplay;
+    }
+
+    function seatStateLabel(state) {
+      return {
+        AVAILABLE: 'Available',
+        HELD: 'Held',
+        SOLD: 'Sold'
+      }[state] || state;
+    }
+
+    function availableCountLabel(count) {
+      return count === 1 ? '1 available' : count + ' available';
+    }
+
+    function showOptionLabel(show) {
+      return show.name + ' · ' + availableCountLabel(show.availableSeats) + ' of ' + show.totalSeats;
+    }
+
+    function ensureShowOption(showId, name) {
+      const select = byId('showId');
+      if (![...select.options].some(option => option.value === showId)) {
+        const option = document.createElement('option');
+        option.value = showId;
+        option.textContent = name || showId;
+        select.appendChild(option);
+      }
+      select.value = showId;
+    }
+
+    function refreshCurrentShowOption(showId, name, totalSeats, availableSeats) {
+      const option = [...byId('showId').options].find(candidate => candidate.value === showId);
+      if (option) option.textContent = showOptionLabel({name, totalSeats, availableSeats});
+    }
+
+    async function loadShows(loadSelected) {
+      const select = byId('showId');
+      const previousValue = select.value;
+      byId('loadSeats').disabled = true;
+      byId('showMeta').textContent = 'Refreshing catalog…';
+      byId('showMeta').className = 'event-meta';
+
+      try {
+        app.shows = await jsonFetch('/api/inventory/shows');
+        select.replaceChildren();
+
+        if (app.shows.length === 0) {
+          const option = document.createElement('option');
+          option.value = '';
+          option.textContent = 'No shows available';
+          select.appendChild(option);
+          app.seats = [];
+          app.selected.clear();
+          renderSeats();
+          byId('showMeta').textContent = 'The catalog is empty. Add a show and seats first.';
+          byId('showMeta').className = 'event-meta error';
+          setConnection('online', 'Services online');
+          return;
+        }
+
+        app.shows.forEach(show => {
+          const option = document.createElement('option');
+          option.value = show.showId;
+          option.textContent = showOptionLabel(show);
+          select.appendChild(option);
+        });
+
+        const preferredShow = app.shows.some(show => show.showId === previousValue)
+          ? app.shows.find(show => show.showId === previousValue)
+          : app.shows.find(show => show.availableSeats > 0) || app.shows[0];
+        select.value = preferredShow.showId;
+        setConnection('online', 'Services online');
+        if (loadSelected !== false) await loadSeats(false);
+      } catch (error) {
+        app.shows = [];
+        select.replaceChildren();
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'Could not load shows';
+        select.appendChild(option);
+        app.seats = [];
+        app.selected.clear();
+        renderSeats();
+        byId('showMeta').textContent = 'Could not load catalog: ' + error.message;
+        byId('showMeta').className = 'event-meta error';
+        setConnection('error', 'Service unavailable');
+      } finally {
+        updateActions();
+      }
+    }
+
+    function renderSeats() {
+      const container = byId('seats');
+      container.replaceChildren();
+      if (app.seats.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-seats';
+        empty.textContent = 'No seats found for this show.';
+        container.appendChild(empty);
+      } else {
+        app.seats.forEach(seat => {
+          const button = document.createElement('button');
+          const selected = app.selected.has(seat.id);
+          button.type = 'button';
+          button.className = 'seat ' + seat.state.toLowerCase() + (selected ? ' selected' : '');
+          button.disabled = seat.state !== 'AVAILABLE' || Boolean(app.reservation) || app.busy;
+          button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+          button.innerHTML = escapeText(seat.code) + '<small>' + escapeText(seatStateLabel(seat.state)) + '</small>';
+          button.addEventListener('click', () => toggleSeat(seat.id));
+          container.appendChild(button);
+        });
+      }
+
+      const selectedSeats = app.seats.filter(seat => app.selected.has(seat.id));
+      const selectedCodes = selectedSeats.map(seat => seat.code);
+      byId('seatCount').textContent = selectedCodes.length === 0 ? 'None selected' : 'Selected: ' + selectedCodes.length;
+      byId('selectionSummary').textContent = selectedCodes.length === 0 ? 'No seats selected' : selectedCodes.join(', ');
+      updateActions();
+    }
+
+    function toggleSeat(seatId) {
+      if (app.busy || app.reservation) return;
+      if (app.selected.has(seatId)) app.selected.delete(seatId);
+      else app.selected.add(seatId);
+      renderSeats();
+    }
+
+    async function loadSeats(silent) {
+      const showId = byId('showId').value.trim();
+      if (!showId) {
+        byId('showMeta').textContent = 'Select a show.';
+        byId('showMeta').className = 'event-meta error';
+        return null;
+      }
+      if (!silent) {
+        byId('showMeta').textContent = 'Loading availability…';
+        byId('showMeta').className = 'event-meta';
+        byId('loadSeats').disabled = true;
+      }
+
+      try {
+        const data = await jsonFetch('/api/inventory/shows/' + encodeURIComponent(showId) + '/seats');
+        app.seats = data.seats;
+        if (!app.reservation) {
+          app.selected = new Set(
+            [...app.selected].filter(id => data.seats.some(seat => seat.id === id && seat.state === 'AVAILABLE'))
+          );
+        }
+        const availableSeats = data.seats.filter(seat => seat.state === 'AVAILABLE').length;
+        const updatedAt = new Date().toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+        byId('showMeta').textContent = data.name + ' · ' + availableCountLabel(availableSeats) +
+          ' of ' + data.seats.length + ' · updated ' + updatedAt;
+        byId('showMeta').className = 'event-meta';
+        refreshCurrentShowOption(showId, data.name, data.seats.length, availableSeats);
+        byId('availabilityNotice').textContent = availableSeats === 0
+          ? 'All seats for this show are sold or temporarily held. Click Refresh to check availability again.'
+          : '';
+        byId('availabilityNotice').classList.toggle('hidden', availableSeats !== 0);
+        setConnection('online', 'Services online');
+        renderSeats();
+        return data;
+      } catch (error) {
+        if (!silent) {
+          app.seats = [];
+          app.selected.clear();
+          renderSeats();
+          byId('showMeta').textContent = error.status === 404
+            ? 'This show is no longer in the catalog.'
+            : 'Could not load seats: ' + error.message;
+          byId('showMeta').className = 'event-meta error';
+          byId('availabilityNotice').classList.add('hidden');
+        }
+        setConnection('error', 'Service unavailable');
+        return null;
+      } finally {
+        updateActions();
+      }
+    }
+
+    function createReservation(payload, idempotencyKey, label = 'Create reservation') {
+      return jsonFetch('/api/booking/reservations', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey},
+        body: JSON.stringify(payload)
+      }, label);
+    }
+
+    async function verifyIdempotency(conflict) {
+      if (app.busy || !app.reservation || !app.idempotencyKey) return;
+      app.busy = true;
+      updateActions();
+      const expectedId = app.reservation.reservationId;
+      const payload = {...app.request, seatIds: [...app.request.seatIds]};
+      if (conflict) payload.buyerName = payload.buyerName === 'Changed Buyer' ? 'Alternate Buyer' : 'Changed Buyer';
+      const result = byId('idempotencyResult');
+      result.className = 'idempotency-result';
+      result.textContent = 'Sending the request with the same Idempotency-Key…';
+      try {
+        const response = await createReservation(payload, app.idempotencyKey, conflict ? 'Different name, same key' : 'Unchanged request');
+        const matches = !conflict && response.reservationId === expectedId;
+        result.className = 'idempotency-result ' + (matches ? 'success' : 'error');
+        result.textContent = matches
+          ? 'Same reservationId: ' + expectedId + '. Current status: ' + response.status + '.'
+          : 'Unexpected result. Check the server response.';
+      } catch (error) {
+        const expectedConflict = conflict && error.status === 409;
+        result.className = 'idempotency-result ' + (expectedConflict ? 'success' : 'error');
+        result.textContent = expectedConflict
+          ? 'HTTP 409: the data does not match the original request.'
+          : 'Check could not be completed: ' + error.message;
+      } finally {
+        app.busy = false;
+        updateActions();
+      }
+    }
+
+    function failureReasonLabel(reason) {
+      if (!reason) return '';
+      const knownReasons = {
+        PAYMENT_DECLINED: 'Payment declined. Seats are released in a separate compensation step.',
+        'One or more seats are not AVAILABLE': 'One or more selected seats are no longer available.',
+        'Show not found in inventory catalog': 'Show not found in the catalog.',
+        'No seat ids provided': 'No seats were selected in the request.',
+        'Concurrent seat update': 'Seat availability changed during the reservation.'
+      };
+      return knownReasons[reason] || reason;
+    }
+
+    function showFailureReason(reason) {
+      app.failureReason = reason || null;
+      byId('failureReasonText').textContent = failureReasonLabel(app.failureReason);
+      byId('failureReason').classList.toggle('hidden', !app.failureReason);
+    }
+
+    function isPaymentFailure() {
+      return app.failureReason === 'PAYMENT_DECLINED' || app.seenSagaStates.has('COMPENSATING');
+    }
+
+    function timelineDefinition(state) {
+      if (state === 'COMPENSATING' || isPaymentFailure()) {
+        return [
+          ['received', 'Request accepted', 'Booking created the reservation'],
+          ['held', 'Seats held', 'Inventory accepted the hold'],
+          ['failed', 'Payment declined', 'Compensation started'],
+          ['released', 'Reservation cancelled', 'Seats released']
+        ];
+      }
+      if (state === 'CANCELLED') {
+        return [
+          ['received', 'Request accepted', 'Booking created the reservation'],
+          ['failed', 'Seats unavailable', 'Inventory rejected the hold'],
+          ['cancelled', 'Reservation cancelled', 'Process complete']
+        ];
+      }
+      return [
+        ['received', 'Request accepted', 'Booking created the reservation'],
+        ['held', 'Holding seats', 'Inventory checks availability'],
+        ['paid', 'Processing payment', 'Payment processes the charge'],
+        ['confirmed', 'Reservation confirmed', 'Seats sold']
+      ];
+    }
+
+    function activeStep(state) {
+      if (state === 'COMPENSATING') return 3;
+      if (state === 'CANCELLED') return timelineDefinition(state).length;
+      return {
+        STARTING: 1,
+        AWAITING_SEATS: 2,
+        SEATS_HELD: 2,
+        AWAITING_PAYMENT: 3,
+        PAYMENT_PAID: 4,
+        CONFIRMED: 5
+      }[state] || 1;
+    }
+
+    function renderTimeline(state) {
+      const steps = timelineDefinition(state);
+      const current = activeStep(state);
+      const terminal = ['CONFIRMED', 'CANCELLED'].includes(state);
+      byId('timeline').innerHTML = steps.map((step, index) => {
+        const position = index + 1;
+        let className = position < current || terminal ? 'done' : position === current ? 'active' : '';
+        if (step[0] === 'failed') className = position <= current ? 'failed' : '';
+        const marker = className === 'done' ? '✓' : className === 'failed' ? '!' : position;
+        return '<li class="' + className + '">' +
+          '<span class="step-dot">' + marker + '</span>' +
+          '<div class="step-copy"><strong>' + escapeText(step[1]) + '</strong><span>' + escapeText(step[2]) + '</span></div>' +
+          '</li>';
+      }).join('');
+    }
+
+    function showTracking() {
+      byId('statusEmpty').classList.add('hidden');
+      byId('statusContent').classList.remove('hidden');
+      byId('newReservation').classList.remove('hidden');
+      byId('reservationId').textContent = app.reservation.reservationId;
+      byId('correlationId').textContent = app.reservation.correlationId;
+      byId('idempotencyKey').textContent = app.idempotencyKey || '—';
+      document.querySelector('[data-copy="idempotencyKey"]').disabled = !app.idempotencyKey;
+      byId('statusSubtitle').textContent = 'Status updates automatically.';
+      byId('idempotencyResult').textContent = app.idempotencyKey
+        ? 'Same request — same ID. Different name — expect 409.'
+        : 'Replay unavailable: this browser does not have the original key.';
+      byId('idempotencyResult').className = 'idempotency-result';
+      setState('bookingState', app.reservation.status);
+      setState('sagaState', 'STARTING');
+      setState('seatState', 'CHECKING');
+      byId('updatedAt').textContent = new Date().toLocaleTimeString('en-GB');
+      showFailureReason(null);
+      renderTimeline('STARTING');
+    }
+
+    function updateReservationUrl(reservationId) {
+      const url = new URL(window.location.href);
+      if (reservationId) url.searchParams.set('reservationId', reservationId);
+      else url.searchParams.delete('reservationId');
+      history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }
+
+    async function copyTechnicalValue(button) {
+      const target = byId(button.dataset.copy);
+      if (!target || target.textContent === '—') return;
+      try {
+        await navigator.clipboard.writeText(target.textContent);
+        const original = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = original; }, 1300);
+      } catch (error) {
+        setMessage('Could not copy the value.', 'error');
+      }
+    }
+
+    async function reserve(event) {
+      event.preventDefault();
+      if (byId('reserve').disabled) return;
+      const payload = {
+        showId: byId('showId').value.trim(),
+        seatIds: [...app.selected].sort(),
+        buyerName: byId('buyerName').value.trim(),
+        buyerEmail: byId('buyerEmail').value.trim()
+      };
+      if (!app.idempotencyKey || JSON.stringify(payload) !== JSON.stringify(app.request)) {
+        app.idempotencyKey = 'reservation-' + crypto.randomUUID();
+      }
+      app.request = payload;
+      app.busy = true;
+      updateActions();
+      byId('reserve').textContent = 'Creating…';
+      setMessage('Sending reservation request.');
+
+      try {
+        app.reservation = await createReservation(app.request, app.idempotencyKey);
+        app.busy = false;
+        app.seenSagaStates.clear();
+        app.failureReason = null;
+        updateReservationUrl(app.reservation.reservationId);
+        showTracking();
+        renderSeats();
+        setMessage('Reservation accepted. Waiting for processing to complete.');
+        const token = ++app.pollToken;
+        await pollReservation(token);
+      } catch (error) {
+        app.busy = false;
+        app.reservation = null;
+        setMessage('Could not retrieve the reservation: ' + error.message + '. Retrying unchanged data will use the same key.', 'error');
+        byId('reserve').textContent = 'Confirm reservation';
+        updateActions();
+      }
+    }
+
+    async function loadExistingReservation(reservationId) {
+      if (app.busy) return;
+      const normalizedId = reservationId.trim();
+      if (!normalizedId) return;
+      byId('openReservation').disabled = true;
+      byId('lookupMessage').textContent = 'Loading reservation…';
+
+      try {
+        const reservation = await jsonFetch('/api/booking/reservations/' + encodeURIComponent(normalizedId));
+        ++app.pollToken;
+        app.reservation = reservation;
+        app.request = {
+          showId: reservation.showId,
+          seatIds: reservation.seatIds,
+          buyerName: reservation.buyerName,
+          buyerEmail: reservation.buyerEmail
+        };
+        app.idempotencyKey = '';
+        app.failureReason = null;
+        app.seenSagaStates.clear();
+        app.selected = new Set(reservation.seatIds);
+        ensureShowOption(reservation.showId, reservation.showId);
+        byId('buyerName').value = reservation.buyerName;
+        byId('buyerEmail').value = reservation.buyerEmail;
+        byId('reservationLookup').value = reservation.reservationId;
+        await loadSeats(true);
+        showTracking();
+        renderSeats();
+        updateReservationUrl(reservation.reservationId);
+        byId('lookupMessage').textContent = '';
+        setMessage('Reservation loaded. Refreshing its status.');
+        const token = ++app.pollToken;
+        await pollReservation(token);
+      } catch (error) {
+        app.reservation = null;
+        byId('lookupMessage').textContent = error.status === 404
+          ? 'No reservation found with this ID.'
+          : 'Could not open reservation: ' + error.message;
+        updateActions();
+      } finally {
+        byId('openReservation').disabled = false;
+      }
+    }
+
+    async function pollReservation(token) {
+      const deadline = Date.now() + 120000;
+      while (token === app.pollToken && app.reservation && Date.now() < deadline) {
+        const reservationId = encodeURIComponent(app.reservation.reservationId);
+        let bookingState = 'PENDING';
+        let sagaState = 'STARTING';
+        try {
+          const booking = await jsonFetch('/api/booking/reservations/' + reservationId);
+          bookingState = booking.status;
+          setState('bookingState', bookingState);
+        } catch (error) {
+          if (error.status !== 404) setState('bookingState', 'ERROR');
+        }
+        try {
+          const saga = await jsonFetch('/api/orchestrator/saga/' + reservationId);
+          sagaState = saga.state;
+          app.seenSagaStates.add(sagaState);
+          showFailureReason(saga.failureReason);
+          setState('sagaState', sagaState);
+          renderTimeline(sagaState);
+        } catch (error) {
+          if (error.status !== 404) setState('sagaState', 'ERROR');
+        }
+
+        const inventory = await loadSeats(true);
+        const trackedSeats = inventory ? inventory.seats.filter(seat => app.request.seatIds.includes(seat.id)) : [];
+        const seatStates = trackedSeats.map(seat => seat.state);
+        setState('seatState', seatStates.join(', ') || 'CHECKING');
+        byId('updatedAt').textContent = new Date().toLocaleTimeString('en-GB');
+        const sold = trackedSeats.length === app.request.seatIds.length && trackedSeats.every(seat => seat.state === 'SOLD');
+
+        if (bookingState === 'CONFIRMED' && sagaState === 'CONFIRMED' && sold) {
+          setMessage('Reservation confirmed successfully.', 'success');
+          byId('statusSubtitle').textContent = 'Reservation completed successfully.';
+          byId('reserve').textContent = 'Confirmed';
+          return;
+        }
+        if (bookingState === 'CANCELLED' && sagaState === 'CANCELLED') {
+          setMessage(isPaymentFailure()
+            ? 'Reservation cancelled. Held seats have been released.'
+            : 'Reservation cancelled. The selected seats were unavailable.', 'error');
+          byId('statusSubtitle').textContent = isPaymentFailure()
+            ? 'Completed with compensation.'
+            : 'Completed without a charge.';
+          byId('reserve').textContent = 'Cancelled';
+          return;
+        }
+        await wait(1000);
+      }
+
+      if (token === app.pollToken && app.reservation) {
+        setMessage('Processing is taking longer than expected. Refresh the status page later.', 'error');
+        byId('statusSubtitle').textContent = 'Automatic updates paused.';
+      }
+    }
+
+    async function resetReservation() {
+      if (app.busy) return;
+      ++app.pollToken;
+      app.reservation = null;
+      app.request = null;
+      app.idempotencyKey = '';
+      app.attempts = [];
+      byId('requestPreview').textContent = 'Your request will appear after you create a reservation.';
+      byId('responsePreview').textContent = 'No response yet.';
+      byId('idempotencyResult').textContent = 'These actions become available after you create a reservation.';
+      byId('idempotencyResult').className = 'idempotency-result';
+      renderHttpEvidence();
+      app.failureReason = null;
+      app.selected.clear();
+      app.seenSagaStates.clear();
+      byId('statusEmpty').classList.remove('hidden');
+      byId('statusContent').classList.add('hidden');
+      byId('newReservation').classList.add('hidden');
+      byId('reservationLookup').value = '';
+      byId('lookupMessage').textContent = '';
+      byId('statusSubtitle').textContent = 'Your status will appear after you create a reservation.';
+      byId('reserve').textContent = 'Confirm reservation';
+      showFailureReason(null);
+      updateReservationUrl(null);
+      setMessage('');
+      await loadSeats(false);
+    }
+
+    byId('reservationForm').addEventListener('submit', reserve);
+    byId('loadSeats').addEventListener('click', () => loadShows(true));
+    byId('newReservation').addEventListener('click', resetReservation);
+    byId('repeatRequest').addEventListener('click', () => verifyIdempotency(false));
+    byId('conflictRequest').addEventListener('click', () => verifyIdempotency(true));
+    byId('buyerName').addEventListener('input', updateActions);
+    byId('buyerEmail').addEventListener('input', updateActions);
+    byId('showId').addEventListener('change', () => {
+      app.selected.clear();
+      loadSeats(false);
+    });
+    byId('lookupForm').addEventListener('submit', event => {
+      event.preventDefault();
+      loadExistingReservation(byId('reservationLookup').value);
+    });
+    document.querySelectorAll('[data-copy]').forEach(button => {
+      button.addEventListener('click', () => copyTechnicalValue(button));
+    });
+
+    async function initialize() {
+      renderTimeline('STARTING');
+      await loadShows(false);
+      const reservationId = new URLSearchParams(window.location.search).get('reservationId');
+      if (reservationId) {
+        byId('reservationLookup').value = reservationId;
+        await loadExistingReservation(reservationId);
+      } else if (byId('showId').value) {
+        await loadSeats(false);
+      }
+    }
+
+    initialize();
+  </script>
+</body>
+</html>
