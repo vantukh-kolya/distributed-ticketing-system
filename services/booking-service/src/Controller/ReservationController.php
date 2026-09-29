@@ -9,9 +9,9 @@ use App\Service\ReservationService;
 use App\Service\ReservationQueryService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
+use Symfony\Component\HttpKernel\Attribute\MapRequestHeader;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 
@@ -26,10 +26,9 @@ final class ReservationController extends AbstractController
     #[Route('/api/reservations', name: 'api_reservations_create', methods: ['POST'])]
     public function create(
         #[MapRequestPayload] CreateReservationRequest $payload,
-        Request $request,
+        #[MapRequestHeader('Idempotency-Key')] string $idempotencyKey,
     ): JsonResponse {
-        $idempotencyKey = $request->headers->get('Idempotency-Key');
-        if ($idempotencyKey === null || $idempotencyKey === '') {
+        if ($idempotencyKey === '') {
             throw new BadRequestHttpException('Header Idempotency-Key is required.');
         }
 
