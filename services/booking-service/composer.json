@@ -6,6 +6,13 @@
     "repositories": [
         {
             "type": "path",
+            "url": "../../packages/outbox",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
             "url": "../../contracts",
             "options": {
                 "symlink": true
@@ -13,6 +20,7 @@
         }
     ],
     "require": {
+        "ticketing/outbox": "@dev",
         "php": ">=8.4",
         "ext-ctype": "*",
         "ext-iconv": "*",

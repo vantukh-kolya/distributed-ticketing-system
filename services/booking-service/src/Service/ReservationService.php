@@ -9,12 +9,12 @@ use App\Dto\ReservationResponse;
 use App\Entity\Reservation;
 use App\Exception\IdempotencyPayloadMismatchException;
 use App\Mapper\ReservationMapper;
-use App\Outbox\OutboxRecorder;
 use App\Repository\ReservationRepository;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Uid\Uuid;
 use Ticketing\Contracts\Event\ReservationRequested;
+use Ticketing\Outbox\OutboxRecorder;
 
 final readonly class ReservationService
 {

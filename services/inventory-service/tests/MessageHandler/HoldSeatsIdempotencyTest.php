@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Tests\MessageHandler;
 
-use App\Entity\OutboxMessage;
 use App\Entity\Seat;
 use App\Entity\SeatHold;
 use App\Entity\Show;
@@ -18,6 +17,7 @@ use Symfony\Component\Messenger\Stamp\ReceivedStamp;
 use Symfony\Component\Messenger\Stamp\TransportMessageIdStamp;
 use Symfony\Component\Uid\Uuid;
 use Ticketing\Contracts\Command\HoldSeats;
+use Ticketing\Outbox\Entity\OutboxMessage;
 
 final class HoldSeatsIdempotencyTest extends KernelTestCase
 {

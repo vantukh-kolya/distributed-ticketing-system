@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "90dfa0c3995047c0bb44cca64c0a300a",
+    "content-hash": "f25cebac681d946fca25d3ac8fdfd94a",
     "packages": [
         {
             "name": "doctrine/collections",
@@ -4904,6 +4904,36 @@
                 "symlink": true,
                 "relative": true
             }
+        },
+        {
+            "name": "ticketing/outbox",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../../packages/outbox",
+                "reference": "f3bb1e869de4e747fe494012100a6af26a1c3f2f"
+            },
+            "require": {
+                "doctrine/doctrine-bundle": "^3.2",
+                "doctrine/orm": "^3.6",
+                "php": ">=8.4",
+                "symfony/serializer": "8.1.*",
+                "symfony/uid": "8.1.*"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Ticketing\\Outbox\\": "src/"
+                }
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "Shared transactional outbox recording for ticketing services",
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
         }
     ],
     "packages-dev": [
@@ -6778,7 +6808,8 @@
     "minimum-stability": "stable",
     "stability-flags": {
         "ticketing/contracts": 20,
-        "ticketing/messenger-idempotency": 20
+        "ticketing/messenger-idempotency": 20,
+        "ticketing/outbox": 20
     },
     "prefer-stable": true,
     "prefer-lowest": false,

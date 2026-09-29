@@ -1,0 +1,19 @@
+{
+    "name": "ticketing/outbox",
+    "description": "Shared transactional outbox recording for ticketing services",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.4",
+        "doctrine/doctrine-bundle": "^3.2",
+        "doctrine/orm": "^3.6",
+        "symfony/serializer": "8.1.*",
+        "symfony/uid": "8.1.*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ticketing\\Outbox\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

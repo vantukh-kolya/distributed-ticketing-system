@@ -14,6 +14,11 @@ doctrine:
             Doctrine\DBAL\Platforms\PostgreSQLPlatform: identity
         auto_mapping: true
         mappings:
+            TicketingOutbox:
+                type: attribute
+                is_bundle: false
+                dir: '%kernel.project_dir%/vendor/ticketing/outbox/src/Entity'
+                prefix: 'Ticketing\Outbox\Entity'
             App:
                 type: attribute
                 is_bundle: false

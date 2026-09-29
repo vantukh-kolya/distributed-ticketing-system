@@ -41,7 +41,7 @@ Compose runs a worker and an outbox relay for each service. Messenger declares q
 | Advance workflow | Inbox claim + saga change + next command or terminal event in outbox |
 | Update Booking status | Reservation status only; inbound bus retains `doctrine_transaction` |
 
-Inbound transaction middleware encloses the inbox and handler. Services start a transaction when called directly or join the handler's active transaction. The [outbox recorder](../services/booking-service/src/Outbox/OutboxRecorder.php) persists through the same EntityManager as the business write.
+Inbound transaction middleware encloses the inbox and handler. Services start a transaction when called directly or join the handler's active transaction. The [shared outbox recorder](../packages/outbox/src/OutboxRecorder.php) persists the package's technical `OutboxMessage` entity using the same service-local EntityManager as the business write. The recorder does not flush, commit or publish; the caller owns the transaction.
 
 There is no transaction spanning PostgreSQL databases or RabbitMQ. Booking can remain `PENDING` while Inventory has already held seats or Payment has completed. Confirmation is reported only after the seat-confirmation outcome reaches Orchestrator and then Booking.
 
@@ -111,8 +111,9 @@ The [PostgreSQL contention runner](../tests/integration/inventory-concurrency.ph
 
 - [contracts/](../contracts/src/) contains framework-independent command/event DTOs. Composer path dependencies and PHP class names simplify this monorepo but couple producers and consumers to constructor and serialization shapes. A schema-only contract would require a separate compatibility policy.
 - [packages/messenger-idempotency/](../packages/messenger-idempotency/src/) contains Symfony Messenger middleware and a DBAL claim store. Sharing this algorithm keeps infrastructure fixes consistent without adding framework dependencies to `contracts/`. Each consuming service owns its migrations, table, consumer name and bus configuration. There is no shared ORM entity; schema changes require coordinated package and service migrations.
+- [packages/outbox/](../packages/outbox/src/) owns the recorder, technical `OutboxMessage` ORM entity, repository and `RoutingKeyResolverInterface`. The identical outbox schema is an explicit exception to keeping entities and repositories local: sharing its mapping and persistence removes four copies of infrastructure code. Each service registers the package's ORM mapping and supplies its own EntityManager and routing map. Each database retains its own `outbox_messages` table and migrations; schema changes in the package require coordinated service migrations. Relay commands remain local, including Orchestrator's command/event bus selection. The package retains ticketing-specific reservation metadata, existing table/column names and stored payload format; extraction does not change delivery guarantees. [Outbox transaction tests](dev-setup.md#outbox-transaction-tests) verify schema compatibility, recording and relay repository behavior in all four services against PostgreSQL.
 
-Entities, repositories and business services remain local to their owning service.
+Business entities, repositories and services remain local to their owning service. The shared outbox entity and repository are technical infrastructure; sharing their code does not share database rows or transactions between services.
 
 ## 8. Symfony layering
 

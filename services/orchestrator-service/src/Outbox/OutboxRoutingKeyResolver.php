@@ -10,8 +10,9 @@ use Ticketing\Contracts\Command\ProcessPayment;
 use Ticketing\Contracts\Command\ReleaseSeats;
 use Ticketing\Contracts\Event\ReservationCancelled;
 use Ticketing\Contracts\Event\ReservationConfirmed;
+use Ticketing\Outbox\RoutingKeyResolverInterface;
 
-final class OutboxRoutingKeyResolver
+final class OutboxRoutingKeyResolver implements RoutingKeyResolverInterface
 {
     public function resolve(object $message): string
     {

@@ -19,6 +19,7 @@ WORKDIR /app/${SERVICE_PATH}
 
 COPY contracts /app/contracts
 COPY packages/messenger-idempotency /app/packages/messenger-idempotency
+COPY packages/outbox /app/packages/outbox
 COPY ${SERVICE_PATH}/composer.json ${SERVICE_PATH}/composer.lock ./
 RUN composer install --no-interaction --prefer-dist --no-scripts
 

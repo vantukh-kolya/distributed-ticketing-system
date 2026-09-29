@@ -88,6 +88,17 @@ Run the same commands from `services/payment-service` for the Payment suite. PHP
 
 The [Inventory suite](../services/inventory-service/tests/) covers catalog reads, sequential hold attempts and duplicate transport delivery. The [Payment suite](../services/payment-service/tests/) covers success/failure, repeat processing, gateway call counts and inbox rollback/redelivery. These are Symfony/Doctrine integration tests; there is no separate isolated unit-test suite. Despite its name, `SeatHoldConcurrencyTest` makes sequential attempts on SQLite and does not verify PostgreSQL locking.
 
+### Outbox transaction tests
+
+After starting PostgreSQL, build the four service images with the shared outbox dependency and run:
+
+```bash
+docker compose build booking inventory payment-worker orchestrator
+./tests/integration/outbox-transactions.sh
+```
+
+The [runner](../tests/integration/outbox-transactions.php) boots each service's real recorder configuration in a separate container. It applies that service's migration SQL to an isolated PostgreSQL schema and removes the schema afterwards. It compares the shared outbox ORM mapping with the existing table, then verifies that representative business and outbox writes wait for the caller's flush, remain invisible to a separate connection before commit, and commit or roll back together. It also checks message IDs, routing, correlation metadata, payload deserialization, rejection of unconfigured message types, and the relay repository's unpublished query and publication marker. This covers recorder/storage integration; it does not exercise RabbitMQ publication or complete business workflows. Source, configuration, migrations and the shared package are mounted; rebuild images when Composer dependencies change.
+
 ### PostgreSQL concurrency tests
 
 After starting the stack:

@@ -8,7 +8,6 @@ use App\Entity\Payment;
 use App\Enum\PaymentStatus;
 use App\Gateway\GatewayPaymentRequest;
 use App\Gateway\PaymentGatewayInterface;
-use App\Outbox\OutboxRecorder;
 use App\Repository\PaymentRepository;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
@@ -16,6 +15,7 @@ use Symfony\Component\Uid\Uuid;
 use Ticketing\Contracts\Command\ProcessPayment;
 use Ticketing\Contracts\Event\PaymentFailed;
 use Ticketing\Contracts\Event\PaymentSucceeded;
+use Ticketing\Outbox\OutboxRecorder;
 
 final readonly class PaymentService
 {

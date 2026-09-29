@@ -9,6 +9,10 @@ services:
     App\:
         resource: '../src/'
 
+    Ticketing\Outbox\OutboxRecorder: ~
+    Ticketing\Outbox\Repository\OutboxMessageRepository: ~
+    Ticketing\Outbox\RoutingKeyResolverInterface: '@App\Outbox\OutboxRoutingKeyResolver'
+
     App\Gateway\PaymentGatewayInterface: '@App\Gateway\FakePaymentGateway'
 
     Ticketing\MessengerIdempotency\InboxMessageStore: ~

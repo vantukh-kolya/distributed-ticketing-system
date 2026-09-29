@@ -2,12 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Entity;
+namespace Ticketing\Outbox\Entity;
 
-use App\Repository\OutboxMessageRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
+use Ticketing\Outbox\Repository\OutboxMessageRepository;
 
+/**
+ * Transactional outbox row: written in the same DB transaction as the business change,
+ * published later by the owning service's relay.
+ */
 #[ORM\Entity(repositoryClass: OutboxMessageRepository::class)]
 #[ORM\Table(name: 'outbox_messages')]
 #[ORM\Index(name: 'idx_outbox_unpublished', columns: ['published_at', 'created_at'])]

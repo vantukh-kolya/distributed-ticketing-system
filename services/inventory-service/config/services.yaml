@@ -20,6 +20,10 @@ services:
     App\:
         resource: '../src/'
 
+    Ticketing\Outbox\OutboxRecorder: ~
+    Ticketing\Outbox\Repository\OutboxMessageRepository: ~
+    Ticketing\Outbox\RoutingKeyResolverInterface: '@App\Outbox\OutboxRoutingKeyResolver'
+
     App\Service\SeatHoldService:
         arguments:
             $holdTtlMinutes: '%app.seat_hold_ttl_minutes%'

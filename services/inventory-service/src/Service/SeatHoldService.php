@@ -7,7 +7,6 @@ namespace App\Service;
 use App\Entity\SeatHold;
 use App\Enum\SeatHoldStatus;
 use App\Enum\SeatLockResult;
-use App\Outbox\OutboxRecorder;
 use App\Repository\SeatHoldRepository;
 use App\Repository\ShowRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -19,6 +18,7 @@ use Ticketing\Contracts\Event\SeatHoldRejected;
 use Ticketing\Contracts\Event\SeatsConfirmed;
 use Ticketing\Contracts\Event\SeatsHeld;
 use Ticketing\Contracts\Event\SeatsReleased;
+use Ticketing\Outbox\OutboxRecorder;
 
 final readonly class SeatHoldService
 {

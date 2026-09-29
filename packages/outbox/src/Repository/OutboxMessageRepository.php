@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace Ticketing\Outbox\Repository;
 
-use App\Entity\OutboxMessage;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
+use Ticketing\Outbox\Entity\OutboxMessage;
 
 /**
  * @extends ServiceEntityRepository<OutboxMessage>

@@ -11,6 +11,10 @@ services:
     App\:
         resource: '../src/'
 
+    Ticketing\Outbox\OutboxRecorder: ~
+    Ticketing\Outbox\Repository\OutboxMessageRepository: ~
+    Ticketing\Outbox\RoutingKeyResolverInterface: '@App\Outbox\OutboxRoutingKeyResolver'
+
     App\Saga\SagaCoordinator:
         arguments:
             $sagaStateMachine: '@state_machine.reservation_saga'

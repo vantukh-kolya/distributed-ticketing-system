@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Tests\MessageHandler;
 
-use App\Entity\OutboxMessage;
 use App\Gateway\GatewayPaymentRequest;
 use App\Gateway\GatewayPaymentResult;
 use App\Gateway\PaymentGatewayInterface;
@@ -19,6 +18,7 @@ use Symfony\Component\Messenger\Stamp\ReceivedStamp;
 use Symfony\Component\Messenger\Stamp\TransportMessageIdStamp;
 use Symfony\Component\Uid\Uuid;
 use Ticketing\Contracts\Command\ProcessPayment;
+use Ticketing\Outbox\Entity\OutboxMessage;
 
 final class ProcessPaymentIdempotencyTest extends KernelTestCase
 {

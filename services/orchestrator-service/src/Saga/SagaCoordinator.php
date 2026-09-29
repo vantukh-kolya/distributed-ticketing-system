@@ -7,7 +7,6 @@ namespace App\Saga;
 use App\Entity\Saga;
 use App\Enum\SagaState;
 use App\Enum\SagaTransition;
-use App\Outbox\OutboxRecorder;
 use App\Repository\SagaRepository;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
@@ -26,6 +25,7 @@ use Ticketing\Contracts\Event\SeatHoldRejected;
 use Ticketing\Contracts\Event\SeatsConfirmed;
 use Ticketing\Contracts\Event\SeatsHeld;
 use Ticketing\Contracts\Event\SeatsReleased;
+use Ticketing\Outbox\OutboxRecorder;
 
 final readonly class SagaCoordinator
 {
