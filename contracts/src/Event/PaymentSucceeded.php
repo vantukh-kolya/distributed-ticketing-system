@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Ticketing\Contracts\Event;
 
-final readonly class PaymentSucceeded
+final readonly class PaymentSucceeded implements ReservationEventInterface
 {
     public function __construct(
         public string $paymentId,

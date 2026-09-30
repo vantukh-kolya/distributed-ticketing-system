@@ -7,7 +7,7 @@ namespace Ticketing\Contracts\Event;
 /**
  * Terminal saga event: reservation is fully confirmed (seats sold + payment paid).
  */
-final readonly class ReservationConfirmed
+final readonly class ReservationConfirmed implements ReservationEventInterface
 {
     public function __construct(
         public string $reservationId,

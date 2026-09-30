@@ -15,9 +15,12 @@ services:
     Ticketing\Outbox\Repository\OutboxMessageRepository: ~
     Ticketing\Outbox\RoutingKeyResolverInterface: '@App\Outbox\OutboxRoutingKeyResolver'
 
-    App\Saga\SagaCoordinator:
+    App\Saga\SagaExecutor:
         arguments:
             $sagaStateMachine: '@state_machine.reservation_saga'
+
+    App\Saga\Strategy\SeatsHeldStrategy:
+        arguments:
             $defaultAmountMinor: '%app.payment.default_amount_minor%'
             $defaultCurrency: '%app.payment.default_currency%'
             $defaultPaymentMethodToken: '%app.payment.default_payment_method_token%'

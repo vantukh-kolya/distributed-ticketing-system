@@ -17,6 +17,6 @@ final readonly class PaymentFailedHandler
 
     public function __invoke(PaymentFailed $event): void
     {
-        $this->sagaCoordinator->onPaymentFailed($event);
+        $this->sagaCoordinator->handle($event);
     }
 }

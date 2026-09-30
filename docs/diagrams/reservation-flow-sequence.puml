@@ -104,5 +104,5 @@ group Local creation transaction
     Relay -> EM: flush() after the entire batch
     EM -> DB: UPDATE outbox_messages.published_at
     note over Relay,MQ: Publish and marking are not atomic: failure before final flush can republish.\nSame outbox row retains message_id (at-least-once delivery).
-    note right of MQ: Async continuation in orchestrator-service:\nReservationRequestedHandler::__invoke()\n→ SagaCoordinator::onReservationRequested().\nSeat holding and payment belong to the subsequent saga.
+    note right of MQ: Async continuation in orchestrator-service:\nReservationRequestedHandler::__invoke()\n→ SagaCoordinator::handle()\n→ ReservationRequestedStrategy::handle().\nSeat holding and payment belong to the subsequent saga.
 @enduml

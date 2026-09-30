@@ -17,6 +17,6 @@ final readonly class ReservationRequestedHandler
 
     public function __invoke(ReservationRequested $event): void
     {
-        $this->sagaCoordinator->onReservationRequested($event);
+        $this->sagaCoordinator->handle($event);
     }
 }

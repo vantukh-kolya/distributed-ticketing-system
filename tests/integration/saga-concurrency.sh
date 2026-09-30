@@ -7,5 +7,6 @@ cd "${REPO_ROOT}"
 docker compose run --rm --no-deps \
     -v "${REPO_ROOT}/services/orchestrator-service/src:/app/services/orchestrator-service/src:ro" \
     -v "${REPO_ROOT}/services/orchestrator-service/config:/app/services/orchestrator-service/config:ro" \
+    -v "${REPO_ROOT}/contracts/src:/app/contracts/src:ro" \
     -v "${SCRIPT_DIR}:/tests:ro" \
     --entrypoint php orchestrator /tests/saga-concurrency.php

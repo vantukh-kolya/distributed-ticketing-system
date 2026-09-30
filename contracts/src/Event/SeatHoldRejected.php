@@ -7,7 +7,7 @@ namespace Ticketing\Contracts\Event;
 /**
  * Published when hold could not be applied (e.g. seat not AVAILABLE).
  */
-final readonly class SeatHoldRejected
+final readonly class SeatHoldRejected implements ReservationEventInterface
 {
     public function __construct(
         public string $reservationId,

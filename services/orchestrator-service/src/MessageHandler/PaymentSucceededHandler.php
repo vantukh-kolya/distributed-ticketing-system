@@ -17,6 +17,6 @@ final readonly class PaymentSucceededHandler
 
     public function __invoke(PaymentSucceeded $event): void
     {
-        $this->sagaCoordinator->onPaymentSucceeded($event);
+        $this->sagaCoordinator->handle($event);
     }
 }

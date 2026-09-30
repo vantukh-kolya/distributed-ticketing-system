@@ -108,7 +108,7 @@ After starting the stack:
 ./tests/integration/saga-concurrency.sh
 ```
 
-These runners use service images and create isolated PostgreSQL schemas, then clean them up without modifying application records. They dispatch through the real inbound Messenger bus without RabbitMQ. The Inventory runner mounts source, configuration and migrations; the saga runner mounts source/configuration and uses migrations from its image. Rebuild when dependencies or unmounted files change. PHPUnit is not required.
+These runners use service images and create isolated PostgreSQL schemas, then clean them up without modifying application records. They dispatch through the real inbound Messenger bus without RabbitMQ. The Inventory runner mounts source, configuration and migrations; the saga runner mounts source, configuration and message contracts, and uses migrations from its image. Rebuild when dependencies or unmounted files change. PHPUnit is not required.
 
 For Inventory-only verification from a fresh checkout:
 
@@ -122,7 +122,7 @@ The [Inventory runner](../tests/integration/inventory-concurrency.php) uses two 
 
 The runner prints observations and assertions, ending with `PASS: both inventory concurrency scenarios; isolated test schema removed.` on success. Failed assertions exit nonzero.
 
-The [saga runner](../tests/integration/saga-concurrency.php) checks the transition matrix and ten competing-handler cases across six transitions, including success/failure events in both orders and rollback. Processes preload stale saga objects, use distinct message IDs and observe actual lock waits before checking committed state and outgoing work. Scope: existing sagas through the inbound bus; concurrent initial creation and HTTP idempotency-key races are not tested.
+The [saga runner](../tests/integration/saga-concurrency.php) checks automatic strategy registration, unsupported/ambiguous dispatch, creation rollback and duplicate delivery, direct-call transactions and outgoing payload/metadata consistency, recording-failure rollback, and no-op outcomes for missing/legacy/terminal sagas. It also checks the transition matrix and ten competing-handler cases across six transitions, including success/failure events in both orders and rollback. Processes preload stale saga objects, use distinct message IDs and observe actual lock waits before checking committed state and outgoing work. Concurrent initial creation and HTTP idempotency-key races are not tested.
 
 ### RabbitMQ end-to-end tests
 

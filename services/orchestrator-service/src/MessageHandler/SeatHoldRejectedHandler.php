@@ -19,6 +19,6 @@ final readonly class SeatHoldRejectedHandler
 
     public function __invoke(SeatHoldRejected $event): void
     {
-        $this->sagaCoordinator->onSeatHoldRejected($event);
+        $this->sagaCoordinator->handle($event);
     }
 }

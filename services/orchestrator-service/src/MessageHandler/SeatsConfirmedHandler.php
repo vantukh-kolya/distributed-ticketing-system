@@ -18,6 +18,6 @@ final readonly class SeatsConfirmedHandler
 
     public function __invoke(SeatsConfirmed $event): void
     {
-        $this->sagaCoordinator->onSeatsConfirmed($event);
+        $this->sagaCoordinator->handle($event);
     }
 }

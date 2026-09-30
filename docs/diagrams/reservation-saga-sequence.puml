@@ -8,7 +8,7 @@ skinparam wrapWidth 420
 autonumber
 
 participant "booking-service" as Booking
-participant "orchestrator-service\nSagaCoordinator" as Saga
+participant "orchestrator-service\nSagaCoordinator + strategies" as Saga
 participant "inventory-service\nSeatHoldService" as Inventory
 participant "payment-service\nPaymentService" as Payment
 
@@ -25,7 +25,7 @@ note over Booking,Payment
   All messages carry reservationId and correlationId. Databases are separate.
 end note
 Booking ->> Saga: ReservationRequested\nreservation.requested → orchestrator.queue
-Saga -> Saga: ReservationRequestedHandler → onReservationRequested()\nTX: create Saga(AWAITING_SEATS) + outbox HoldSeats; COMMIT
+Saga -> Saga: ReservationRequestedStrategy::handle()\nTX: create Saga(AWAITING_SEATS) + outbox HoldSeats; COMMIT
 Saga ->> Inventory: HoldSeats\nseats.hold → inventory.queue
 Inventory -> Inventory: HoldSeatsHandler → hold()\nTX: validate show and seat IDs; SeatLockingService::attemptHold()
 note right of Inventory
@@ -36,16 +36,16 @@ end note
 alt Hold rejected: missing show/seats or seats unavailable
     Inventory -> Inventory: TX: outbox SeatHoldRejected(reason); COMMIT\nNo seats held for this request
     Inventory ->> Saga: SeatHoldRejected\nseats.hold_rejected → orchestrator.queue
-    Saga -> Saga: SeatHoldRejectedHandler → onSeatHoldRejected()\nTX: recordFailure(reason), AWAITING_SEATS → CANCELLED\n+ outbox ReservationCancelled; COMMIT
+    Saga -> Saga: SeatHoldRejectedStrategy::handle()\nTX: AWAITING_SEATS → CANCELLED, recordFailure(reason)\n+ outbox ReservationCancelled; COMMIT
     Saga ->> Booking: ReservationCancelled\nreservation.cancelled → booking.queue
     Booking -> Booking: ReservationCancelledHandler\n→ ReservationCancellationService::onReservationCancelled()\nTX: PENDING → CANCELLED; COMMIT
 else Hold succeeds
     Inventory -> Inventory: TX: seats AVAILABLE → HELD; persist SeatHold(expiresAt)\n+ outbox SeatsHeld; COMMIT
     Inventory ->> Saga: SeatsHeld\nseats.held → orchestrator.queue
-    Saga -> Saga: SeatsHeldHandler → onSeatsHeld()\nTX: AWAITING_SEATS → AWAITING_PAYMENT\n+ outbox ProcessPayment; COMMIT
+    Saga -> Saga: SeatsHeldStrategy::handle()\nTX: AWAITING_SEATS → AWAITING_PAYMENT\n+ outbox ProcessPayment; COMMIT
     note left of Saga
       Amount, currency and paymentMethodToken currently
-      come from SagaCoordinator configuration defaults.
+      come from SeatsHeldStrategy configuration defaults.
     end note
     Saga ->> Payment: ProcessPayment\npayment.process → payment.queue
     Payment -> Payment: ProcessPaymentHandler → process()\nTX: create/reuse Payment; FakePaymentGateway::process()\nGateway request idempotencyKey = reservationId
@@ -58,21 +58,21 @@ else Hold succeeds
     alt Payment succeeds
         Payment -> Payment: TX: Payment → PAID + outbox PaymentSucceeded; COMMIT
         Payment ->> Saga: PaymentSucceeded\npayment.succeeded → orchestrator.queue
-        Saga -> Saga: PaymentSucceededHandler → onPaymentSucceeded()\nTX: AWAITING_PAYMENT → PAYMENT_PAID\n+ outbox ConfirmSeats; COMMIT
+        Saga -> Saga: PaymentSucceededStrategy::handle()\nTX: AWAITING_PAYMENT → PAYMENT_PAID\n+ outbox ConfirmSeats; COMMIT
         Saga ->> Inventory: ConfirmSeats\nseats.confirm → inventory.queue
         Inventory -> Inventory: ConfirmSeatsHandler → confirm()\nTX: check active hold; lock seats held by this reservation\nSeats HELD → SOLD, SeatHold → CONFIRMED\n+ outbox SeatsConfirmed; COMMIT
         Inventory ->> Saga: SeatsConfirmed\nseats.confirmed → orchestrator.queue
-        Saga -> Saga: SeatsConfirmedHandler → onSeatsConfirmed()\nTX: PAYMENT_PAID → CONFIRMED\n+ outbox ReservationConfirmed; COMMIT
+        Saga -> Saga: SeatsConfirmedStrategy::handle()\nTX: PAYMENT_PAID → CONFIRMED\n+ outbox ReservationConfirmed; COMMIT
         Saga ->> Booking: ReservationConfirmed\nreservation.confirmed → booking.queue
         Booking -> Booking: ReservationConfirmedHandler\n→ ReservationConfirmationService::onReservationConfirmed()\nTX: Reservation → CONFIRMED; COMMIT
     else Payment fails
         Payment -> Payment: TX: Payment → FAILED + outbox PaymentFailed(reason); COMMIT
         Payment ->> Saga: PaymentFailed\npayment.failed → orchestrator.queue
-        Saga -> Saga: PaymentFailedHandler → onPaymentFailed()\nTX: recordFailure(reason), AWAITING_PAYMENT → COMPENSATING\n+ outbox ReleaseSeats; COMMIT
+        Saga -> Saga: PaymentFailedStrategy::handle()\nTX: AWAITING_PAYMENT → COMPENSATING, recordFailure(reason)\n+ outbox ReleaseSeats; COMMIT
         Saga ->> Inventory: ReleaseSeats\nseats.release → inventory.queue
         Inventory -> Inventory: ReleaseSeatsHandler → release()\nTX: check active hold; lock seats held by this reservation\nSeats HELD → AVAILABLE, SeatHold → RELEASED\n+ outbox SeatsReleased; COMMIT
         Inventory ->> Saga: SeatsReleased\nseats.released → orchestrator.queue
-        Saga -> Saga: SeatsReleasedHandler → onSeatsReleased()\nTX: COMPENSATING → CANCELLED\n+ outbox ReservationCancelled; COMMIT
+        Saga -> Saga: SeatsReleasedStrategy::handle()\nTX: COMPENSATING → CANCELLED\n+ outbox ReservationCancelled; COMMIT
         Saga ->> Booking: ReservationCancelled\nreservation.cancelled → booking.queue
         Booking -> Booking: ReservationCancelledHandler\n→ ReservationCancellationService::onReservationCancelled()\nTX: PENDING → CANCELLED; COMMIT
         note over Saga,Inventory
@@ -84,7 +84,8 @@ end
 
 note over Booking,Payment
   Delivery is at least once. Inventory, Payment and Orchestrator deduplicate message_id via inbox.
-  Existing saga transitions lock the saga row, then check Workflow::can() before apply().
+  Messenger handlers call SagaCoordinator::handle(), which selects an automatically registered strategy.
+  SagaExecutor locks existing saga rows, checks Workflow::can(), applies the transition and runs the reaction.
   Missing saga / disallowed transitions are no-ops. Booking ignores repeated terminal updates.
 end note
 note over Saga,Inventory
